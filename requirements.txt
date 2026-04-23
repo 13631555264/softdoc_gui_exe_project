@@ -1,0 +1,28 @@
+# 软著文档生成工具 - Python依赖包
+
+# GUI相关
+tkinterdnd2==0.3.0
+
+# OCR相关（使用火山引擎 API，不再需要 Tesseract）
+# pytesseract==0.3.10  # 不再需要
+
+# 图片处理
+Pillow==10.0.0
+opencv-python==4.8.1.78
+
+# PDF处理
+pdfplumber==0.10.3
+PyMuPDF==1.24.0  # 用于PDF转图片
+
+# 文档处理
+python-docx==1.1.0
+
+# 工具类
+pyperclip==1.8.2
+numpy==1.24.3
+
+# 网络请求
+requests==2.31.0
+
+# 打包工具 
+pyinstaller==6.0.0
