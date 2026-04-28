@@ -4,8 +4,31 @@
 软著文档生成工具 - 主程序入口
 """
 
-import os
+
 import sys
+import os
+import locale
+
+# 强制设置编码，解决 exe 打包后的编码问题
+if sys.platform == 'win32':
+    try:
+        # 设置控制台编码为 UTF-8
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
+            sys.stderr.reconfigure(encoding='utf-8', errors='ignore')
+    except:
+        pass
+    
+    # 设置环境变量
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+    os.environ['PYTHONUTF8'] = '1'
+
+# 添加当前目录到Python路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, str(current_dir))
+
+
+
 from pathlib import Path
 
 # 添加当前目录到Python路径

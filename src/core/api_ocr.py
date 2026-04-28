@@ -23,7 +23,7 @@ class VolcEngineOCR:
     def __init__(self, api_key: str = None, model: str = "doubao-seed-2-0-lite-260215"):
         self.api_url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
         # 请在这里填入您的 API Key
-        self.api_key = api_key or "a0081937-958a-44d4-8144-f713d09ada03"
+        self.api_key = api_key or "374bc8a8-b92c-4e1c-a839-6f6d51f61b8c"
         self.model = model
         self.max_tokens = 65535
     
@@ -80,7 +80,20 @@ class VolcEngineOCR:
         
         return image_paths
     
-    def recognize_image(self, image_path: str, question: str = "请提取图片中的所有文字内容，包括标题、正文、表格等。保持原有格式和排版。") -> str:
+    def recognize_image(self, image_path: str, question: str = None) -> str:
+        """识别单张图片中的文字"""
+        # 默认 prompt：针对软著证书优化，提高识别准确性
+        if question is None:
+            question = """请仔细识别这张图片中的所有文字内容，这是一张中国计算机软件著作权登记证书。
+
+重要要求：
+1. **精确识别**：严格按照图片中的文字输出，不要修改、添加或推断任何文字
+2. **注意相似字**：常见易混淆的字包括：要/耍、来/米、大/太、人/入等，务必对照图片仔细识别
+3. **保持原样**：保留原文中的标点符号、换行和格式
+4. **逐字核对**：对于公司名称、人名等重要信息，逐字核对确保准确
+5. **特殊符号**：注意中文顿号（、）和逗号（，）的区别，注意书名号《》和引号""的区别
+
+请直接输出识别结果，不要添加解释说明。"""
         """识别单张图片中的文字"""
         try:
             image_data_url = self.read_image_as_base64(image_path)
@@ -113,22 +126,39 @@ class VolcEngineOCR:
                 "Authorization": f"Bearer {self.api_key}"
             }
             
-            response = requests.post(
-                self.api_url,
-                headers=headers,
-                json=payload,
-                timeout=120
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                content = result['choices'][0]['message']['content']
-                logger.info(f"API 识别成功，返回 {len(content)} 字符")
-                return content
-            else:
-                logger.error(f"API 请求失败: {response.status_code} - {response.text}")
-                return ""
+            # 重试机制：最多尝试 3 次，超时时间增加到 180 秒
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    response = requests.post(
+                        self.api_url,
+                        headers=headers,
+                        json=payload,
+                        timeout=180
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        content = result['choices'][0]['message']['content']
+                        logger.info(f"API 识别成功，返回 {len(content)} 字符")
+                        return content
+                    else:
+                        logger.warning(f"API 请求失败 (尝试 {attempt}/3): {response.status_code}")
+                        last_error = f"HTTP {response.status_code}"
+                        
+                except requests.exceptions.Timeout:
+                    logger.warning(f"API 请求超时 (尝试 {attempt}/3): 180秒内未收到响应")
+                    last_error = "请求超时"
+                except Exception as e:
+                    logger.warning(f"API 请求异常 (尝试 {attempt}/3): {e}")
+                    last_error = str(e)
                 
+                if attempt < 3:
+                    import time
+                    time.sleep(2)  # 等待 2 秒后重试
+            
+            logger.error(f"图片识别失败: {last_error}")
+            return ""
         except Exception as e:
             logger.error(f"图片识别失败: {e}")
             return ""

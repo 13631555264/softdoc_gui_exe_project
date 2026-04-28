@@ -231,14 +231,15 @@ class DependencyChecker:
             print("   需要 Python 3.7 或更高版本")
             return False
     
-    def create_setup_script(self):
-        """创建设置脚本"""
-        print("\n📝 创建环境设置脚本...")
-        
-        # 创建Windows批处理文件
-        batch_file = self.current_dir / "setup_environment.bat"
-        
-        batch_content = '''@echo off
+
+def create_setup_script(self):
+    """创建设置脚本"""
+    print("\n📝 创建环境设置脚本...")
+    
+    # 创建 Windows 批处理文件（使用普通字符，避免编码问题）
+    batch_file = self.current_dir / "setup_environment.bat"
+    
+    batch_content = '''@echo off
 chcp 65001 > nul
 echo ==========================================
 echo 软著文档生成工具 - 环境设置脚本
@@ -248,7 +249,7 @@ echo.
 echo 步骤 1: 检查Python版本...
 python --version
 if errorlevel 1 (
-    echo ❌ Python未安装或不在PATH中
+    echo [ERROR] Python未安装或不在PATH中
     echo    请安装Python 3.7+并添加到PATH
     pause
     exit /b 1
@@ -266,12 +267,11 @@ echo.
 echo 步骤 4: 检查Tesseract OCR...
 where tesseract >nul 2>&1
 if errorlevel 1 (
-    echo ⚠️  Tesseract未安装
+    echo [WARNING] Tesseract未安装
     echo    请下载并安装Tesseract OCR
     echo    下载地址: https://github.com/UB-Mannheim/tesseract/wiki
     echo    安装后请将路径添加到PATH
 )
-
 
 echo.
 echo 步骤 5: 验证安装...
@@ -280,9 +280,9 @@ echo 检查依赖包...
 python -c "
 try:
     import tkinterdnd2
-    print('✅ tkinterdnd2 已安装')
+    print('tkinterdnd2 已安装')
 except:
-    print('❌ tkinterdnd2 未安装')
+    print('tkinterdnd2 未安装')
 "
 echo.
 
@@ -297,22 +297,22 @@ echo   2. 或运行自动安装版本：python run_with_install.py
 echo.
 pause
 '''
+    
+    try:
+        with open(batch_file, 'w', encoding='gbk', errors='ignore') as f:
+            f.write(batch_content)
         
-        try:
-            with open(batch_file, 'w', encoding='gbk') as f:
-                f.write(batch_content)
-            
-            # 创建Python版本
-            py_file = self.current_dir / "setup_environment.py"
-            
-            py_content = '''#!/usr/bin/env python3
+        # 创建 Python 版本（使用 UTF-8 编码）
+        py_file = self.current_dir / "setup_environment.py"
+        
+        py_content = '''#!/usr/bin/env python3
 
 import sys
 import subprocess
 
 def run_command(cmd, description):
     """运行命令并显示结果"""
-    print(f"{description}...", end="")
+    print(f"{description}...", end=" ")
     
     try:
         result = subprocess.run(
@@ -323,22 +323,22 @@ def run_command(cmd, description):
         )
         
         if result.returncode == 0:
-            print(" ✅")
+            print("[OK]")
             if result.stdout.strip():
                 print(f"  输出: {result.stdout.strip()}")
             return True
         else:
-            print(" ❌")
+            print("[FAIL]")
             if result.stderr.strip():
                 print(f"  错误: {result.stderr.strip()}")
             return False
             
     except subprocess.TimeoutExpired:
-        print(" ⏱️ 超时")
+        print("[TIMEOUT]")
         return False
         
     except Exception as e:
-        print(f" ❌ {e}")
+        print(f"[ERROR] {e}")
         return False
 
 def main():
@@ -347,16 +347,16 @@ def main():
     
     # 检查Python版本
     if sys.version_info < (3, 7):
-        print("❌ 需要 Python 3.7 或更高版本")
+        print("[ERROR] 需要 Python 3.7 或更高版本")
         return 1
     
-    print(f"✅ Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+    print(f"[OK] Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
     
     # 升级pip
     run_command([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], "升级pip")
     
     # 安装依赖
-    print("\n安装依赖包...")
+    print("\\n安装依赖包...")
     success = run_command([
         sys.executable, "-m", "pip", "install", "-r", "requirements.txt",
         "-i", "https://pypi.tuna.tsinghua.edu.cn/simple",
@@ -364,18 +364,18 @@ def main():
     ], "安装依赖包")
     
     if not success:
-        print("⚠️  依赖安装失败，尝试手动安装")
+        print("[WARNING] 依赖安装失败，尝试手动安装")
         print("   运行: pip install -r requirements.txt")
     
     # 检查Tesseract
-    print("\n检查Tesseract OCR...")
+    print("\\n检查Tesseract OCR...")
     if run_command(["tesseract", "--version"], "Tesseract检查"):
-        print("✅ Tesseract OCR 已安装")
+        print("[OK] Tesseract OCR 已安装")
     else:
-        print("❌ Tesseract OCR 未安装")
+        print("[ERROR] Tesseract OCR 未安装")
         print("   请下载并安装: https://github.com/UB-Mannheim/tesseract/wiki")
     
-    print("\n" + "=" * 50)
+    print("\\n" + "=" * 50)
     print("环境设置完成！")
     
     return 0
@@ -383,19 +383,19 @@ def main():
 if __name__ == "__main__":
     sys.exit(main())
 '''
-            
-            with open(py_file, 'w', encoding='utf-8') as f:
-                f.write(py_content)
-            
-            print(f"✅ 创建环境设置脚本:")
-            print(f"   - {batch_file.name} (Windows批处理)")
-            print(f"   - {py_file.name} (Python脚本)")
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ 创建设置脚本失败: {e}")
-            return False
+        
+        with open(py_file, 'w', encoding='utf-8') as f:
+            f.write(py_content)
+        
+        print(f"✅ 创建环境设置脚本:")
+        print(f"   - {batch_file.name} (Windows批处理)")
+        print(f"   - {py_file.name} (Python脚本)")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ 创建设置脚本失败: {e}")
+        return False
     
     def run(self):
         """运行依赖检查"""
