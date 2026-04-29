@@ -130,18 +130,20 @@ class BatchFileMatcher:
             game_name = self.extract_game_name_from_qg(qp)
             logger.info(f"【匹配调试】处理渠广文件: {os.path.basename(qp)} -> 游戏名: '{game_name}'")
             
-            # 在软著文件名中寻找以游戏名开头的文件
-            found = None
+            # 在软著文件名中寻找以游戏名开头的所有文件（支持同一游戏的多个软著文件）
+            found_files = []
             for stem, sp in softdoc_index.items():
                 logger.info(f"    对比: stem='{stem}' startswith '{game_name}' ? {stem.startswith(game_name)}")
                 if stem.startswith(game_name):
-                    found = sp
+                    found_files.append(sp)
                     logger.info(f"    >>> 匹配成功! softdoc: {os.path.basename(sp)}")
-                    break
-            if found:
-                # 找到的是文件，取其所在文件夹
-                matched.append((qp, os.path.dirname(found), game_name))
-                used_softdoc.add(found)
+            
+            if found_files:
+                # 找到的是文件，取其所在文件夹（所有匹配的文件属于同一个文件夹）
+                # 对于同一个游戏的多张软著图片，只需要一个 matched 条目
+                matched.append((qp, os.path.dirname(found_files[0]), game_name))
+                used_softdoc.update(found_files)
+                logger.info(f"    >>> 共匹配 {len(found_files)} 个软著文件")
             else:
                 logger.info(f"    >>> 未匹配")
                 qg_only.append(qp)
@@ -192,6 +194,8 @@ class BatchFileMatcher:
                     game_to_qg[gn] = []
                 game_to_qg[gn].append(qp)
 
+            print(f"【DEBUG】待匹配的游戏列表: {list(game_to_qg.keys())}")
+
             # 对每个软著文件夹，从已收集的 OCR 文本中进行回退匹配
             for softdoc_dir, images in all_softdoc_dirs.items():
                 # 从该文件夹的图片中获取 OCR 文本
@@ -200,24 +204,84 @@ class BatchFileMatcher:
                               os.path.dirname(img) == os.path.normpath(softdoc_dir)]
                 combined_text = '\n'.join(folder_texts) if folder_texts else ''
                 
-                # 尝试匹配 qg_only 中任一游戏名
+                print(f"\n{'='*60}")
+                print(f"【DEBUG】处理软著文件夹: {softdoc_dir}")
+                print(f"【DEBUG】该文件夹包含 {len(images)} 个图片: {[os.path.basename(i) for i in images]}")
+                print(f"【DEBUG】该文件夹 OCR 合并文本 ({len(combined_text)} 字符):")
+                # 显示更多文本内容，方便调试
+                preview_lines = combined_text.split('\n')[:15]  # 显示前15行
+                for line in preview_lines:
+                    if line.strip():
+                        print(f"    | {line[:80]}{'...' if len(line) > 80 else ''}")
+                if len(combined_text.split('\n')) > 15:
+                    print(f"    ... (还有 {len(combined_text.split(chr(10)))-15} 行)")
+                print(f"{'='*60}")
+                
+                # 尝试匹配 qg_only 中任一游戏名（按顺序尝试每个游戏）
                 folder_game_name = ''
                 for gn, qp_list in list(game_to_qg.items()):
                     if not qp_list:
+                        print(f"【DEBUG】  跳过已匹配的游戏: {gn}")
                         continue
-                    # 在 OCR 文本中搜索游戏名
-                    if gn in combined_text:
+                    
+                    print(f"\n--- 尝试匹配游戏: '{gn}' ---")
+                    
+                    # 精确匹配
+                    exact_match = gn in combined_text
+                    print(f"【DEBUG】  精确匹配 ('{gn}' in text): {exact_match}")
+                    
+                    # 模糊匹配：去空格/标点
+                    clean_text = ''.join(c for c in combined_text if c.isalnum() or '\u4e00' <= c <= '\u9fff')
+                    clean_gn = ''.join(c for c in gn if c.isalnum() or '\u4e00' <= c <= '\u9fff')
+                    fuzzy_match = clean_gn in clean_text if clean_gn else False
+                    print(f"【DEBUG】  模糊匹配 (去标点空格后): {fuzzy_match}")
+                    
+                    # 如果模糊匹配成功，显示匹配位置
+                    if fuzzy_match and not exact_match:
+                        idx = clean_text.find(clean_gn)
+                        start = max(0, idx - 10)
+                        end = min(len(clean_text), idx + len(clean_gn) + 10)
+                        print(f"【DEBUG】  模糊匹配位置: ...{clean_text[start:end]}...")
+                    
+                    # 在 OCR 文本中搜索游戏名（精确优先）
+                    if exact_match or fuzzy_match:
+                        match_type = "精确" if exact_match else "模糊"
                         folder_game_name = gn
-                        print(f"【DEBUG】>>> OCR 回退匹配成功! '{gn}' in '{softdoc_dir}'")
+                        print(f"【DEBUG】  >>> OCR 回退匹配成功({match_type})! '{gn}'")
                         logger.info(f"    >>> OCR 回退匹配成功! 游戏名 '{gn}'")
+                        
+                        # 找到OCR文本中包含该游戏名的具体图片文件
+                        matched_images = []
+                        for img_path, ocr_text in all_ocr_texts.items():
+                            if gn in ocr_text:
+                                matched_images.append(img_path)
+                                print(f"【DEBUG】  匹配到图片: {os.path.basename(img_path)}")
+                        
+                        # 添加匹配结果
                         for qp in qp_list:
                             matched.append((qp, softdoc_dir, gn))
-                            used_softdoc.update(images)
+                        
+                        # 只标记匹配到的图片文件为已使用，不要标记整个文件夹
+                        if matched_images:
+                            print(f"【DEBUG】  标记 {len(matched_images)} 个图片为已使用: {[os.path.basename(i) for i in matched_images]}")
+                            used_softdoc.update(matched_images)
+                        else:
+                            print(f"【DEBUG】  警告: 未找到对应的图片文件")
+                        
                         game_to_qg[gn] = []  # 该游戏已匹配
-                        break
+                        # 注意：不去掉break，让循环继续匹配其他游戏
+                        # 这样可以处理一个文件夹包含多个游戏软著的情况
+                    else:
+                        print(f"【DEBUG】  >>> 该文件夹未能匹配游戏 '{gn}'")
+                
+                # 不加break，允许继续匹配其他游戏（一个文件夹可能有多个游戏的软著）
                 
                 if not folder_game_name:
-                    print(f"【DEBUG】>>> OCR 回退匹配失败: 文件夹 '{softdoc_dir}'")
+                    print(f"\n【DEBUG】>>> OCR 回退匹配失败: 文件夹 '{softdoc_dir}'")
+                    print(f"【DEBUG】    该文件夹的OCR文本中未找到任何待匹配的游戏名")
+                    
+            # 打印最终状态
+            print(f"【DEBUG】OCR 回退匹配完成，剩余未匹配: {[gn for gn, qps in game_to_qg.items() if qps]}")
 
             # 剩余仍未匹配的 QG 文件
             qg_only = [qp for qps in game_to_qg.values() for qp in qps]
@@ -890,10 +954,29 @@ class MainWindow:
 
                 # ===== 3. 解析软著 =====
                 step_timer = time.time()
-                print(f"【{idx}】[3/4] 开始解析软著文件夹: {sp}")
+                print(f"\n{'='*60}")
+                print(f"【{idx}】[3/4] 开始解析软著文件夹")
+                print(f"  游戏名(渠广): {game_name}")
+                print(f"  软著文件夹: {sp}")
+                print(f"  OCR缓存文件数: {len(folder_cached)}")
+                if folder_cached:
+                    for img_path, text in folder_cached.items():
+                        print(f"    - {os.path.basename(img_path)}: {len(text)} 字符")
+                print(f"{'='*60}")
+                
                 try:
                     soft_info = soft_parser.parse_from_folder(sp, game_name, cached_ocr_texts=folder_cached)
-                    print(f"【{idx}】[3/4] 软著解析完成，耗时: {time.time()-step_timer:.2f}s")
+                    print(f"【{idx}】[3/4] 软著解析完成")
+                    print(f"  >>> 解析结果:")
+                    print(f"      软件名称: {soft_info.get('software_name', '')}")
+                    print(f"      著作权人: {soft_info.get('copyright_holder', '')}")
+                    print(f"      登记号: {soft_info.get('registration_number', '')}")
+                    # 关键检查：软著名是否包含游戏名
+                    soft_name = soft_info.get('software_name', '')
+                    if soft_name and game_name and game_name not in soft_name:
+                        print(f"  >>> ⚠️ 警告: 软件名称 '{soft_name}' 不包含游戏名 '{game_name}'")
+                        print(f"      这可能是匹配错误或OCR识别错误!")
+                    print(f"  耗时: {time.time()-step_timer:.2f}s")
                 except Exception as e:
                     print(f"【{idx}】[3/4] 软著解析异常: {e}，使用默认值")
                     logger.warning(f"软著解析失败，使用默认值: {e}")
@@ -911,10 +994,32 @@ class MainWindow:
                 if not soft_info.get('copyright_holder'):
                     soft_info['copyright_holder'] = game_info.get('publisher', '')
 
+                # 查找该游戏对应的软著文件（PDF 和图片都支持）
+                import glob as _glob
+                softdoc_files_set = set()  # 用 set 去重，避免 glob 大小写重复匹配
+                img_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp')
+                sp_norm = sp.replace('\\', '/')
+                game_clean = game_name.replace(' ', '').replace('_', '')
+                
+                # 搜索所有支持的文件类型（只用小写扩展名，Windows 不区分大小写）
+                for ext in ['pdf'] + list(img_exts):
+                    found_files = _glob.glob(os.path.join(sp, f'*.{ext}'))
+                    for f in found_files:
+                        fname = os.path.basename(f).replace(' ', '').replace('_', '')
+                        if game_clean in fname:
+                            # 使用小写路径作为 key 去重
+                            f_lower = f.lower()
+                            if f_lower not in softdoc_files_set:
+                                softdoc_files_set.add(f_lower)
+                                print(f"【{idx}】[4/4] 找到软著文件: {os.path.basename(f)}")
+                
+                # 转换为列表（保持排序）
+                softdoc_files = sorted(softdoc_files_set)
+
                 # ===== 4. 生成文档 =====
                 step_timer = time.time()
                 print(f"【{idx}】[4/4] 开始生成文档...")
-                files = generator.generate_documents(game_info, soft_info)
+                files = generator.generate_documents(game_info, soft_info, softdoc_files=softdoc_files)
                 print(f"【{idx}】[4/4] 文档生成完成，耗时: {time.time()-step_timer:.2f}s")
 
                 success_list.append((game_name, files))

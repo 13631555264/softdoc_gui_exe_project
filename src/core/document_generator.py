@@ -34,7 +34,15 @@ class DocumentGenerator:
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"设置输出目录: {output_dir}")
     
-    def generate_documents(self, game_info: Dict, soft_info: Dict) -> List[str]:
+    def generate_documents(self, game_info: Dict, soft_info: Dict, softdoc_files: List[str] = None) -> List[str]:
+        """
+        生成文档。
+        
+        Args:
+            game_info: 游戏信息字典
+            soft_info: 软著信息字典
+            softdoc_files: 软著文件列表（支持 PDF 和图片），为空则跳过软著图片输出
+        """
         generated_files = []
         
         game_name = self._sanitize_filename(game_info.get('game_name', '未知游戏'))
@@ -62,12 +70,91 @@ class DocumentGenerator:
             if auth_file:
                 generated_files.append(auth_file)
         
-        log_file = self._generate_process_log(game_info, soft_info, game_output_dir, generated_files)
-        if log_file:
-            generated_files.append(log_file)
+        # log_file = self._generate_process_log(game_info, soft_info, game_output_dir, generated_files)
+        # if log_file:
+        #     generated_files.append(log_file)
+        
+        # 处理软著文件（PDF 转图片，图片直接复制）
+        if softdoc_files:
+            # 统计已处理的文件数量（用于命名序号）
+            file_counter = 1
+            for softdoc_path in softdoc_files:
+                if not os.path.exists(softdoc_path):
+                    logger.warning(f"软著文件不存在，跳过: {softdoc_path}")
+                    continue
+                
+                ext = os.path.splitext(softdoc_path)[1].lower()
+                
+                if ext == '.pdf':
+                    # PDF：转换为图片
+                    images = self._convert_pdf_to_images(softdoc_path, game_output_dir, file_counter)
+                    generated_files.extend(images)
+                    file_counter += len(images)
+                else:
+                    # 图片：直接复制到输出目录
+                    saved = self._copy_softdoc_image(softdoc_path, game_output_dir, file_counter)
+                    if saved:
+                        generated_files.append(saved)
+                        file_counter += 1
         
         logger.info(f"文档生成完成，共生成{len(generated_files)}个文件")
         return generated_files
+    
+    def _convert_pdf_to_images(self, pdf_path: str, output_dir: str, start_counter: int = 1) -> List[str]:
+        """将 PDF 转换为图片并保存到输出目录（纯本地操作，无需 API Key）"""
+        try:
+            import fitz  # PyMuPDF，纯本地库，不需要 API Key
+        except ImportError:
+            logger.error("未安装 PyMuPDF，请运行: pip install pymupdf")
+            return []
+        
+        try:
+            doc = fitz.open(pdf_path)
+            if doc.page_count == 0:
+                logger.warning(f"PDF 文件为空: {pdf_path}")
+                return []
+            
+            # 高清渲染：使用 2x 缩放（DPI = 72 * zoom）
+            zoom = 2.0
+            matrix = fitz.Matrix(zoom, zoom)
+            
+            saved_images = []
+            game_name = os.path.basename(output_dir)
+            
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                pix = page.get_pixmap(matrix=matrix)
+                
+                # 保存为 PNG（支持透明通道，质量更好）
+                counter = start_counter + page_num
+                new_name = f"{game_name}_软著_{counter}.png"
+                new_path = os.path.join(output_dir, new_name)
+                pix.save(new_path)
+                saved_images.append(new_path)
+                
+                logger.info(f"保存软著图片: {new_name} (页面 {page_num + 1}/{len(doc)})")
+            
+            doc.close()
+            logger.info(f"PDF 转图片完成，共转换 {len(saved_images)} 页")
+            return saved_images
+        except Exception as e:
+            logger.error(f"PDF 转图片失败: {e}")
+            return []
+    
+    def _copy_softdoc_image(self, image_path: str, output_dir: str, counter: int) -> Optional[str]:
+        """复制软著图片到输出目录（保持原格式）"""
+        try:
+            game_name = os.path.basename(output_dir)
+            ext = os.path.splitext(image_path)[1].lower()
+            new_name = f"{game_name}_软著_{counter}{ext}"
+            new_path = os.path.join(output_dir, new_name)
+            
+            shutil.copy2(image_path, new_path)
+            logger.info(f"保存软著图片: {new_name}")
+            return new_path
+        except Exception as e:
+            logger.error(f"复制软著图片失败: {e}")
+            return None
     
     def _prepare_replace_data(self, game_info: Dict, soft_info: Dict) -> Dict:
         auth_years = self.config.get('processing.authorization_years', 10)

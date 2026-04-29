@@ -288,7 +288,7 @@ class SoftDocParser:
             print(f"    {os.path.basename(f)}")
         logger.info(f"找到 {len(all_files)} 个文件: {[os.path.basename(f) for f in all_files]}")
 
-        # 2. 如果有游戏名提示，按游戏名筛选 PDF 文件
+        # 2. 如果有游戏名提示，按游戏名筛选文件（PDF 和图片）
         matched_files = []
         if game_name_hint:
             print(f"【PARSER DEBUG】使用游戏名筛选: '{game_name_hint}'")
@@ -299,72 +299,93 @@ class SoftDocParser:
                 hint_clean = game_name_hint.replace(' ', '').replace('_', '')
                 if hint_clean in fname_clean:
                     matched_files.append(f)
-                    print(f"【PARSER DEBUG】  匹配: {fname}")
-            if matched_files:
-                print(f"【PARSER DEBUG】通过文件名匹配筛选出 {len(matched_files)} 个文件")
+                    print(f"【PARSER DEBUG】  文件名匹配: {fname}")
+            
+            # 文件名匹配失败后，尝试从 OCR 缓存中查找包含游戏名的图片
+            if not matched_files:
+                print(f"【PARSER DEBUG】文件名匹配失败，尝试从 OCR 缓存中查找...")
+                if cached_ocr_texts:
+                    for img_path, ocr_text in cached_ocr_texts.items():
+                        # img_path 可能是标准化的（正斜杠）
+                        img_dir = os.path.dirname(img_path).replace('\\', '/')
+                        if img_dir == folder_path_norm and game_name_hint in ocr_text:
+                            matched_files.append(img_path)
+                            print(f"【PARSER DEBUG】  OCR缓存匹配: {os.path.basename(img_path)}")
+                
+                if not matched_files:
+                    print(f"【PARSER DEBUG】OCR 缓存也未找到匹配，使用全部文件（可能导致解析错误）")
+                    # 不再使用全部文件，而是返回空结果
+                    # 让调用者知道匹配失败
+                    logger.warning(f"文件夹 {folder_path} 未找到游戏 '{game_name_hint}' 对应的文件")
+                    return self._get_empty_result()
             else:
-                print(f"【PARSER DEBUG】文件名匹配失败，使用全部文件作为后备")
-                matched_files = all_files
+                print(f"【PARSER DEBUG】通过文件名匹配筛选出 {len(matched_files)} 个文件")
         else:
             matched_files = all_files
 
-        # 3. 处理匹配到的文件
-        for fpath in matched_files:
-            ext = os.path.splitext(fpath)[1].lower()
+        # 3. 处理匹配到的文件：先处理 PDF，再并发处理图片
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        pdf_files = [f for f in matched_files if os.path.splitext(f)[1].lower() == '.pdf']
+        image_files = [f for f in matched_files if os.path.splitext(f)[1].lower() != '.pdf']
+        
+        # 3.1 顺序处理 PDF
+        print(f"【PARSER DEBUG】处理 {len(pdf_files)} 个 PDF 文件...")
+        for fpath in pdf_files:
             try:
-                # 标准化路径用于缓存查询
+                text = self._parse_pdf(fpath)
+                if text and text.strip():
+                    all_text_parts.append(text)
+                    logger.info(f"  PDF 文字提取成功: {len(text)} 字符")
+                else:
+                    logger.info(f"  PDF 无文字内容")
+            except Exception as e:
+                logger.warning(f"  PDF 处理失败: {e}")
+        
+        # 3.2 并发处理图片 OCR
+        if image_files:
+            print(f"【PARSER DEBUG】并发处理 {len(image_files)} 个图片文件...")
+            
+            def process_single_image(fpath):
+                """处理单张图片，返回 (fpath, text)"""
                 fpath_norm = os.path.normpath(fpath).replace('\\', '/')
                 
-                if ext == '.pdf':
-                    text = self._parse_pdf(fpath)
+                # 尝试从缓存获取
+                if cached_ocr_texts:
+                    if fpath_norm in cached_ocr_texts:
+                        return (fpath, cached_ocr_texts[fpath_norm], 'cache')
+                    elif fpath in cached_ocr_texts:
+                        return (fpath, cached_ocr_texts[fpath], 'cache')
+                if self.cached_ocr_texts:
+                    if fpath_norm in self.cached_ocr_texts:
+                        return (fpath, self.cached_ocr_texts[fpath_norm], 'cache')
+                    elif fpath in self.cached_ocr_texts:
+                        return (fpath, self.cached_ocr_texts[fpath], 'cache')
+                
+                # 缓存未命中，调用 API
+                try:
+                    text = self._parse_image_with_api(fpath)
+                    return (fpath, text, 'api')
+                except Exception as e:
+                    logger.warning(f"  图片 OCR 失败: {os.path.basename(fpath)}: {e}")
+                    return (fpath, '', 'error')
+            
+            # 使用线程池并发处理，最多 4 个线程
+            max_workers = min(4, len(image_files))
+            print(f"【PARSER DEBUG】启动 {max_workers} 个并发线程...")
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(process_single_image, f): f for f in image_files}
+                for future in as_completed(futures):
+                    fpath, text, source = future.result()
                     if text and text.strip():
                         all_text_parts.append(text)
-                        logger.info(f"  PDF 文字提取成功: {len(text)} 字符")
-                    else:
-                        logger.info(f"  PDF 无文字内容，将尝试 OCR 图片...")
-                else:
-                    # 图片：优先使用预缓存的 OCR 结果
-                    print(f"【PARSER DEBUG】处理图片原始: {fpath}")
-                    print(f"【PARSER DEBUG】标准化路径: {fpath_norm}")
-                    
-                    # 打印缓存的 keys 用于调试
-                    if cached_ocr_texts:
-                        print(f"【PARSER DEBUG】传入缓存 keys: {list(cached_ocr_texts.keys())}")
-                    if self.cached_ocr_texts:
-                        print(f"【PARSER DEBUG】self缓存 keys: {list(self.cached_ocr_texts.keys())}")
-                    
-                    # 尝试在缓存中查找（尝试多种路径格式）
-                    found_cache = None
-                    # 1. 优先用传入的 cached_ocr_texts
-                    if cached_ocr_texts:
-                        if fpath_norm in cached_ocr_texts:
-                            found_cache = cached_ocr_texts[fpath_norm]
-                            print(f"【PARSER DEBUG】>>> 传入缓存命中! (fpath_norm)")
-                        elif fpath in cached_ocr_texts:
-                            found_cache = cached_ocr_texts[fpath]
-                            print(f"【PARSER DEBUG】>>> 传入缓存命中! (fpath原始)")
-                    # 2. 其次用 self.cached_ocr_texts
-                    if found_cache is None and self.cached_ocr_texts:
-                        if fpath_norm in self.cached_ocr_texts:
-                            found_cache = self.cached_ocr_texts[fpath_norm]
-                            print(f"【PARSER DEBUG】>>> self缓存命中! (fpath_norm)")
-                        elif fpath in self.cached_ocr_texts:
-                            found_cache = self.cached_ocr_texts[fpath]
-                            print(f"【PARSER DEBUG】>>> self缓存命中! (fpath原始)")
-                    
-                    if found_cache is not None:
-                        text = found_cache
-                        logger.info(f"  图片使用缓存 OCR: {os.path.basename(fpath)}, {len(text)} 字符")
-                    else:
-                        print(f"【PARSER DEBUG】>>> 缓存未命中，调用 API!")
-                        logger.info(f"  图片 OCR 识别: {os.path.basename(fpath)}")
-                        text = self._parse_image_with_api(fpath)
-                    if text and text.strip():
-                        all_text_parts.append(text)
-                        logger.info(f"  内容提取成功: {len(text)} 字符")
-            except Exception as e:
-                logger.warning(f"  处理失败 {os.path.basename(fpath)}: {e}")
-                continue
+                        if source == 'cache':
+                            logger.info(f"  图片使用缓存 OCR: {os.path.basename(fpath)}, {len(text)} 字符")
+                        else:
+                            logger.info(f"  图片 OCR 成功: {os.path.basename(fpath)}, {len(text)} 字符")
+                    elif source == 'api':
+                        logger.warning(f"  图片 OCR 返回空内容: {os.path.basename(fpath)}")
 
         if not all_text_parts:
             logger.warning("文件夹内所有文件均未能提取到文字")
