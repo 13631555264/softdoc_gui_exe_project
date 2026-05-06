@@ -6,11 +6,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('src\\core', 'core'), ('src\\gui', 'gui'), ('C:\\Users\\wpp\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages\\tkinterdnd2', 'tkinterdnd2')],
-    hiddenimports=['tkinterdnd2'],
+    hiddenimports=['tkinterdnd2', 'pdfplumber', 'fitz', 'docx', 'openpyxl', 'pypinyin'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['numpy', 'pandas', 'matplotlib', 'cv2', 'pytesseract'],
+    excludes=['pandas', 'numpy', 'matplotlib', 'scipy'],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

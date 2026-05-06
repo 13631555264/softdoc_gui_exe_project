@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-软著文档生成工具 - 主窗口（批量模式）
+软著文档生成工具 - 主窗口（整合版）
 """
 
 import os
@@ -15,7 +15,6 @@ if sys.platform == 'win32':
     except:
         pass
     os.environ['PYTHONIOENCODING'] = 'utf-8'
-
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -42,18 +41,12 @@ logger = logging.getLogger("softdoc_generator")
 # 批量文件匹配器
 # ------------------------------------------------------------------ #
 class BatchFileMatcher:
-    """
-    根据游戏名称，将渠广目录下的 txt 与软著目录下的 pdf 自动配对。
-
-    渠广文件名规范：  {游戏名}_vivo小游戏渠广.txt  （_前面是游戏名）
-    软著文件名规范：  {游戏名}...pdf              （文件名以游戏名开头）
-    """
+    """根据游戏名称，将渠广目录下的 txt 与软著目录下的 pdf 自动配对"""
 
     def __init__(self, qg_dir: str, softdoc_dir: str):
         self.qg_dir = qg_dir
         self.softdoc_dir = softdoc_dir
 
-    # ---- 收集文件列表 ----
     def _list_qg_files(self) -> List[str]:
         return [
             os.path.join(self.qg_dir, f)
@@ -62,7 +55,6 @@ class BatchFileMatcher:
         ]
 
     def _list_softdoc_files(self) -> List[str]:
-        """返回软著文件夹下所有 PDF 和图片文件（用于匹配）"""
         img_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp')
         return [
             os.path.join(self.softdoc_dir, f)
@@ -70,101 +62,57 @@ class BatchFileMatcher:
             if f.lower().endswith('.pdf') or os.path.splitext(f.lower())[1] in img_exts
         ]
 
-    # ---- 从渠广文件名提取游戏名 ----
     @staticmethod
     def extract_game_name_from_qg(filename: str) -> str:
-        """
-        从渠广文件名提取游戏名。
-        规则：取文件名（不含扩展名）中第一个 _ 前面的部分。
-        若没有 _，则取整个文件名。
-        """
         stem = os.path.splitext(os.path.basename(filename))[0]
         if '_' in stem:
             return stem.split('_')[0].strip()
         return stem.strip()
 
-    # ---- 匹配 ----
     def match(self, api_ocr=None) -> Dict:
-        """
-        返回：
-        {
-            'matched':      [(qg_path, softdoc_dir, game_name), ...],
-            'qg_only':      [qg_path, ...],           # 渠广有，软著没匹配上
-            'softdoc_only': [softdoc_dir, ...],        # 软著有，渠广没匹配上
-            'all_ocr_texts': {图片路径: OCR文本, ...}, # 所有 OCR 文本（供后续复用）
-        }
-        注意：matched / softdoc_only 中的第二项是文件夹路径（str），不是文件路径。
-        parse_from_folder() 会自动扫描该文件夹下的 PDF 和所有图片。
-
-        若 api_ocr 传入，则收集所有软著图片的 OCR 结果，供后续处理复用。
-        """
-        import os, glob as _glob, re as _re
+        import glob as _glob, re as _re
         
-        # ===== 调试日志：收集文件列表 =====
         qg_files = self._list_qg_files()
         softdoc_files = self._list_softdoc_files()
         
-        logger.info("=" * 60)
-        logger.info("【匹配调试】渠广目录: " + self.qg_dir)
-        logger.info(f"【匹配调试】找到渠广文件 ({len(qg_files)} 个):")
-        for qf in qg_files:
-            logger.info(f"    {os.path.basename(qf)}")
+        logger.info(f"【匹配】渠广文件 {len(qg_files)} 个，软著文件 {len(softdoc_files)} 个")
         
-        logger.info(f"【匹配调试】找到软著文件 ({len(softdoc_files)} 个):")
-        for sf in softdoc_files:
-            logger.info(f"    {os.path.basename(sf)}")
-        
-        # 建立软著文件名索引（basename，不含扩展名）
-        softdoc_index: Dict[str, str] = {}  # basename_stem -> full_path
+        softdoc_index: Dict[str, str] = {}
         for sp in softdoc_files:
             stem = os.path.splitext(os.path.basename(sp))[0]
             softdoc_index[stem] = sp
         
-        logger.info(f"【匹配调试】软著文件名 stems: {list(softdoc_index.keys())}")
-        
         matched = []
         qg_only = []
         used_softdoc = set()
-
+        
         for qp in qg_files:
             game_name = self.extract_game_name_from_qg(qp)
-            logger.info(f"【匹配调试】处理渠广文件: {os.path.basename(qp)} -> 游戏名: '{game_name}'")
             
-            # 在软著文件名中寻找以游戏名开头的所有文件（支持同一游戏的多个软著文件）
             found_files = []
             for stem, sp in softdoc_index.items():
-                logger.info(f"    对比: stem='{stem}' startswith '{game_name}' ? {stem.startswith(game_name)}")
                 if stem.startswith(game_name):
                     found_files.append(sp)
-                    logger.info(f"    >>> 匹配成功! softdoc: {os.path.basename(sp)}")
             
             if found_files:
-                # 找到的是文件，取其所在文件夹（所有匹配的文件属于同一个文件夹）
-                # 对于同一个游戏的多张软著图片，只需要一个 matched 条目
                 matched.append((qp, os.path.dirname(found_files[0]), game_name))
                 used_softdoc.update(found_files)
-                logger.info(f"    >>> 共匹配 {len(found_files)} 个软著文件")
             else:
-                logger.info(f"    >>> 未匹配")
                 qg_only.append(qp)
-
-        # ---------- OCR 收集（所有软著文件夹） ----------
-        # 无论文件名匹配是否成功，只要有 api_ocr，就收集所有软著图片的 OCR 结果
-        # 这样后续处理时可以复用，避免重复 OCR
+        
         all_ocr_texts: Dict[str, str] = {}
-        all_softdoc_dirs: Dict[str, List[str]] = {}  # dir -> [image_paths]
+        
+        # 初始化 game_to_qg 字典（放在这里，确保在任何分支都能访问）
+        game_to_qg: Dict[str, List[str]] = {}
         
         if api_ocr:
-            # 收集所有软著文件夹
+            all_softdoc_dirs: Dict[str, List[str]] = {}
             for sp in softdoc_files:
                 d = os.path.dirname(sp)
                 if d not in all_softdoc_dirs:
                     all_softdoc_dirs[d] = []
                 all_softdoc_dirs[d].append(sp)
             
-            print(f"【DEBUG】收集 OCR 文本: {len(all_softdoc_dirs)} 个文件夹")
-            
-            # 构建所有渠广游戏名提示
             all_game_names = set()
             for qp in qg_files:
                 gn = self.extract_game_name_from_qg(qp)
@@ -173,263 +121,131 @@ class BatchFileMatcher:
             all_game_hints = '|'.join(all_game_names)
             
             for softdoc_dir, images in all_softdoc_dirs.items():
-                print(f"【DEBUG】OCR 扫描文件夹: {softdoc_dir}")
-                folder_game_name, image_to_game, folder_raw_texts = _build_softdoc_folder_game_names(
+                folder_game_name, image_to_game, folder_raw_texts = self._build_softdoc_folder_game_names(
                     softdoc_dir, api_ocr, game_hint=all_game_hints
                 )
                 all_ocr_texts.update(folder_raw_texts)
-                print(f"【DEBUG】OCR 结果: 游戏名='{folder_game_name}', 文本数={len(folder_raw_texts)}")
+            
+            # OCR 回退匹配
+            if qg_only:
+                game_to_qg = {}  # 重新初始化
+                for qp in qg_only:
+                    gn = self.extract_game_name_from_qg(qp)
+                    if gn not in game_to_qg:
+                        game_to_qg[gn] = []
+                    game_to_qg[gn].append(qp)
+                
+                for softdoc_dir, images in all_softdoc_dirs.items():
+                    folder_texts = [text for img, text in all_ocr_texts.items() 
+                                if os.path.dirname(img) == softdoc_dir or 
+                                    os.path.dirname(img) == os.path.normpath(softdoc_dir)]
+                    combined_text = '\n'.join(folder_texts) if folder_texts else ''
+                    
+                    # 遍历 game_to_qg 的副本，因为要修改原字典
+                    for gn, qp_list in list(game_to_qg.items()):
+                        if not qp_list:
+                            continue
+                        
+                        if gn in combined_text:
+                            for qp in qp_list:
+                                matched.append((qp, softdoc_dir, gn))
+                            game_to_qg[gn] = []
+                
+                # 更新 qg_only 为仍未匹配的
+                qg_only = [qp for qps in game_to_qg.values() for qp in qps]
         
-        # ---------- OCR 回退匹配 ----------
-        # 文件名匹配失败时：从已收集的 OCR 文本中进行第二轮匹配
-        if api_ocr and qg_only:
-            print(f"【DEBUG】开始 OCR 回退匹配，共 {len(qg_only)} 个渠广文件需要匹配")
-            logger.info(f"【匹配调试】文件名匹配后剩余 {len(qg_only)} 个渠广文件未匹配，尝试 OCR 回退...")
-
-            # 构建游戏名 → QG文件 的反向索引
-            game_to_qg: Dict[str, List[str]] = {}
-            for qp in qg_only:
-                gn = self.extract_game_name_from_qg(qp)
-                if gn not in game_to_qg:
-                    game_to_qg[gn] = []
-                game_to_qg[gn].append(qp)
-
-            print(f"【DEBUG】待匹配的游戏列表: {list(game_to_qg.keys())}")
-
-            # 对每个软著文件夹，从已收集的 OCR 文本中进行回退匹配
-            for softdoc_dir, images in all_softdoc_dirs.items():
-                # 从该文件夹的图片中获取 OCR 文本
-                folder_texts = [text for img, text in all_ocr_texts.items() 
-                           if os.path.dirname(img) == softdoc_dir or 
-                              os.path.dirname(img) == os.path.normpath(softdoc_dir)]
-                combined_text = '\n'.join(folder_texts) if folder_texts else ''
-                
-                print(f"\n{'='*60}")
-                print(f"【DEBUG】处理软著文件夹: {softdoc_dir}")
-                print(f"【DEBUG】该文件夹包含 {len(images)} 个图片: {[os.path.basename(i) for i in images]}")
-                print(f"【DEBUG】该文件夹 OCR 合并文本 ({len(combined_text)} 字符):")
-                # 显示更多文本内容，方便调试
-                preview_lines = combined_text.split('\n')[:15]  # 显示前15行
-                for line in preview_lines:
-                    if line.strip():
-                        print(f"    | {line[:80]}{'...' if len(line) > 80 else ''}")
-                if len(combined_text.split('\n')) > 15:
-                    print(f"    ... (还有 {len(combined_text.split(chr(10)))-15} 行)")
-                print(f"{'='*60}")
-                
-                # 尝试匹配 qg_only 中任一游戏名（按顺序尝试每个游戏）
-                folder_game_name = ''
-                for gn, qp_list in list(game_to_qg.items()):
-                    if not qp_list:
-                        print(f"【DEBUG】  跳过已匹配的游戏: {gn}")
-                        continue
-                    
-                    print(f"\n--- 尝试匹配游戏: '{gn}' ---")
-                    
-                    # 精确匹配
-                    exact_match = gn in combined_text
-                    print(f"【DEBUG】  精确匹配 ('{gn}' in text): {exact_match}")
-                    
-                    # 模糊匹配：去空格/标点
-                    clean_text = ''.join(c for c in combined_text if c.isalnum() or '\u4e00' <= c <= '\u9fff')
-                    clean_gn = ''.join(c for c in gn if c.isalnum() or '\u4e00' <= c <= '\u9fff')
-                    fuzzy_match = clean_gn in clean_text if clean_gn else False
-                    print(f"【DEBUG】  模糊匹配 (去标点空格后): {fuzzy_match}")
-                    
-                    # 如果模糊匹配成功，显示匹配位置
-                    if fuzzy_match and not exact_match:
-                        idx = clean_text.find(clean_gn)
-                        start = max(0, idx - 10)
-                        end = min(len(clean_text), idx + len(clean_gn) + 10)
-                        print(f"【DEBUG】  模糊匹配位置: ...{clean_text[start:end]}...")
-                    
-                    # 在 OCR 文本中搜索游戏名（精确优先）
-                    if exact_match or fuzzy_match:
-                        match_type = "精确" if exact_match else "模糊"
-                        folder_game_name = gn
-                        print(f"【DEBUG】  >>> OCR 回退匹配成功({match_type})! '{gn}'")
-                        logger.info(f"    >>> OCR 回退匹配成功! 游戏名 '{gn}'")
-                        
-                        # 找到OCR文本中包含该游戏名的具体图片文件
-                        matched_images = []
-                        for img_path, ocr_text in all_ocr_texts.items():
-                            if gn in ocr_text:
-                                matched_images.append(img_path)
-                                print(f"【DEBUG】  匹配到图片: {os.path.basename(img_path)}")
-                        
-                        # 添加匹配结果
-                        for qp in qp_list:
-                            matched.append((qp, softdoc_dir, gn))
-                        
-                        # 只标记匹配到的图片文件为已使用，不要标记整个文件夹
-                        if matched_images:
-                            print(f"【DEBUG】  标记 {len(matched_images)} 个图片为已使用: {[os.path.basename(i) for i in matched_images]}")
-                            used_softdoc.update(matched_images)
-                        else:
-                            print(f"【DEBUG】  警告: 未找到对应的图片文件")
-                        
-                        game_to_qg[gn] = []  # 该游戏已匹配
-                        # 注意：不去掉break，让循环继续匹配其他游戏
-                        # 这样可以处理一个文件夹包含多个游戏软著的情况
-                    else:
-                        print(f"【DEBUG】  >>> 该文件夹未能匹配游戏 '{gn}'")
-                
-                # 不加break，允许继续匹配其他游戏（一个文件夹可能有多个游戏的软著）
-                
-                if not folder_game_name:
-                    print(f"\n【DEBUG】>>> OCR 回退匹配失败: 文件夹 '{softdoc_dir}'")
-                    print(f"【DEBUG】    该文件夹的OCR文本中未找到任何待匹配的游戏名")
-                    
-            # 打印最终状态
-            print(f"【DEBUG】OCR 回退匹配完成，剩余未匹配: {[gn for gn, qps in game_to_qg.items() if qps]}")
-
-            # 剩余仍未匹配的 QG 文件
-            qg_only = [qp for qps in game_to_qg.values() for qp in qps]
-        elif qg_only and not api_ocr:
-            print(f"【DEBUG】跳过 OCR 回退：qg_only={len(qg_only)} 但 api_ocr 为空")
-            logger.warning("【匹配调试】跳过了 OCR 回退，因为 api_ocr 未传入")
-
         softdoc_only = [sp for sp in softdoc_files if sp not in used_softdoc]
         
-        # ===== 调试日志：最终结果 =====
-        logger.info("【匹配调试】===== 匹配结果汇总 =====")
-        logger.info(f"  匹配成功: {len(matched)} 个")
-        for m in matched:
-            logger.info(f"    {os.path.basename(m[0])} <-> {os.path.basename(m[1])}")
-        logger.info(f"  渠广无匹配: {len(qg_only)} 个")
-        for q in qg_only:
-            logger.info(f"    {os.path.basename(q)}")
-        logger.info(f"  软著无匹配: {len(softdoc_only)} 个")
-        logger.info("=" * 60)
-
         return {
             'matched': matched,
             'qg_only': qg_only,
             'softdoc_only': softdoc_only,
-            'all_ocr_texts': all_ocr_texts,  # 复用 OCR 结果，避免重复调用
+            'all_ocr_texts': all_ocr_texts,
         }
-
-
-# ------------------------------------------------------------------ #
-# OCR 提取：获取图片文本并提取游戏名
-# ------------------------------------------------------------------ #
-import re as _re
-
-def _ocr_image_extract_game_name(image_path: str, api_ocr, fallback_hint: str = '') -> tuple:
-    """
-    对单张图片做 OCR，提取完整文本并从中提取软著游戏名称。
-    返回：(提取到的游戏名, 原始识别文本)
-    """
-    try:
-        # 统一只做一次 OCR，获取完整文本
-        raw_text = api_ocr.recognize_image(image_path)
+    
+    def _build_softdoc_folder_game_names(self, softdoc_dir: str, api_ocr, game_hint: str = ''):
+        import glob as _glob
+        softdoc_dir = os.path.normpath(softdoc_dir)
+        img_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp')
+        images = []
+        for ext in img_exts:
+            images.extend(_glob.glob(os.path.join(softdoc_dir, f'*{ext}')))
+            images.extend(_glob.glob(os.path.join(softdoc_dir, f'*{ext.upper()}')))
+        images = sorted(set(images))
+        # 关键：统一使用正斜杠作为路径分隔符
+        images = [p.replace('\\', '/') for p in images]
         
-        # 打印原始识别结果，方便调试
-        print(f"\n{'='*60}")
-        print(f"【OCR原始】图片: {os.path.basename(image_path)}")
-        print(f"【OCR原始】内容:\n{raw_text[:1000]}{'...[截断]' if len(raw_text) > 1000 else ''}")
-        print(f"{'='*60}\n")
+        folder_game_name = ''
+        image_to_game: Dict[str, str] = {}
+        all_raw_texts: Dict[str, str] = {}
         
-        if not raw_text or not raw_text.strip():
+        for img in images:
+            gn, raw_text = self._ocr_image_extract_game_name(img, api_ocr, fallback_hint=game_hint)
+            image_to_game[img] = gn
+            if raw_text:
+                all_raw_texts[img] = raw_text  # 用标准化路径作为键
+            if gn and not folder_game_name:
+                folder_game_name = gn
+        
+        return (folder_game_name, image_to_game, all_raw_texts)
+        
+    def _ocr_image_extract_game_name(self, image_path: str, api_ocr, fallback_hint: str = ''):
+        import time
+        start_time = time.time()
+        
+        print(f"  【OCR调用】开始识别: {os.path.basename(image_path)}")
+        
+        try:
+            raw_text = api_ocr.recognize_image(image_path)
+            elapsed = time.time() - start_time
+            print(f"  【OCR调用】完成，耗时 {elapsed:.1f}秒，文本长度 {len(raw_text) if raw_text else 0}")
+            
+            if not raw_text or not raw_text.strip():
+                print(f"  【OCR调用】返回空文本")
+                return ('', '')
+            
+            game_name = ''
+            
+            # 策略0：优先匹配 fallback_hint
+            if fallback_hint:
+                hints = [h.strip() for h in fallback_hint.split('|') if h.strip()]
+                for hint in hints:
+                    if hint in raw_text:
+                        print(f"  【OCR调用】匹配到 hint: {hint}")
+                        return (hint, raw_text)
+            
+            # 策略1：从《游戏名》格式提取
+            m = re.search(r'《([^》]{2,30})》', raw_text)
+            if m:
+                name = m.group(1).strip()
+                if name not in ('游戏', '软件', '系统', '平台', '著作权授权书'):
+                    print(f"  【OCR调用】从书名号提取: {name}")
+                    return (name, raw_text)
+            
+            # 策略2：从"软件名称"字段提取
+            m = re.search(r'软件名称[：:\s]*([^\n]{2,30})', raw_text)
+            if m:
+                print(f"  【OCR调用】从软件名称提取: {m.group(1).strip()}")
+                return (m.group(1).strip(), raw_text)
+            
+            # 策略3：取第一行
+            lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
+            if lines and 2 < len(lines[0]) < 30:
+                print(f"  【OCR调用】从第一行提取: {lines[0]}")
+                return (lines[0], raw_text)
+            
+            print(f"  【OCR调用】未能提取游戏名")
+            return ('', raw_text)
+        except Exception as e:
+            print(f"  【OCR调用】异常: {e}")
             return ('', '')
-        
-        game_name = ''
-
-        # ---------- 策略0：优先匹配 fallback_hint（渠广游戏名） ----------
-        if fallback_hint:
-            hints = [h.strip() for h in fallback_hint.split('|') if h.strip()]
-            for hint in hints:
-                # 精确匹配
-                if hint in raw_text:
-                    print(f"【OCR提取】策略0渠广精确匹配: '{hint}'")
-                    return (hint, raw_text)
-                # 模糊匹配：忽略空格/标点
-                clean_raw = _re.sub(r'[\s\d\.,，。、]', '', raw_text)
-                clean_hint = _re.sub(r'[\s\d\.,，。、]', '', hint)
-                if clean_hint and clean_hint in clean_raw:
-                    print(f"【OCR提取】策略0渠广模糊匹配: '{hint}'")
-                    return (hint, raw_text)
-
-        # ---------- 策略1：从《游戏名》格式提取 ----------
-        m = _re.search(r'《([^》]{2,30})》', raw_text)
-        if m:
-            name = m.group(1).strip()
-            if name not in ('游戏', '软件', '系统', '平台', '著作权授权书'):
-                print(f"【OCR提取】策略1《》格式: '{name}'")
-                return (name, raw_text)
-
-        # ---------- 策略2：从"软件名称"字段提取 ----------
-        m = _re.search(r'软件名称[：:\s]*([^\n]{2,30})', raw_text)
-        if m:
-            name = m.group(1).strip()
-            print(f"【OCR提取】策略2软件名称字段: '{name}'")
-            return (name, raw_text)
-
-        # ---------- 策略3：取第一行 ----------
-        lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
-        if lines:
-            first = lines[0]
-            if 2 < len(first) < 30 and not first.startswith('软著'):
-                print(f"【OCR提取】策略3第一行: '{first}'")
-                return (first, raw_text)
-
-        # ---------- 策略4：取最短的非通用行 ----------
-        for line in lines:
-            line = line.strip()
-            if len(line) < 2 or len(line) > 20:
-                continue
-            invalid_keywords = ('软著', '著作权', '登记证书', '保护条例', '授权书', '计算机')
-            if any(kw in line for kw in invalid_keywords):
-                continue
-            if _re.match(r'^[a-zA-Z0-9\s]+$', line):
-                continue
-            print(f"【OCR提取】策略4最短行: '{line}'")
-            return (line, raw_text)
-
-        print(f"【OCR提取】未能提取游戏名，原始文本长度={len(raw_text)}")
-        return ('', raw_text)
-    except Exception as e:
-        print(f"【OCR提取】异常: {e}")
-        import traceback
-        traceback.print_exc()
-        return ('', '')
-
-
-def _build_softdoc_folder_game_names(softdoc_dir: str, api_ocr, game_hint: str = '') -> tuple:
-    """
-    扫描软著文件夹内所有图片，OCR 提取游戏名。
-    返回：(folder_game_name, image_to_game, all_raw_texts)
-    """
-    import glob as _glob
-    softdoc_dir = os.path.normpath(softdoc_dir)  # 标准化路径
-    img_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp')
-    images = []
-    for ext in img_exts:
-        images.extend(_glob.glob(os.path.join(softdoc_dir, f'*{ext}')))
-        images.extend(_glob.glob(os.path.join(softdoc_dir, f'*{ext.upper()}')))
-    images = sorted(set(images))
-    # 标准化所有路径（统一用正斜杠），确保缓存命中
-    images = [p.replace('\\', '/') for p in images]
-
-    folder_game_name = ''
-    image_to_game: Dict[str, str] = {}
-    all_raw_texts: Dict[str, str] = {}
-
-    for img in images:
-        gn, raw_text = _ocr_image_extract_game_name(img, api_ocr, fallback_hint=game_hint)
-        image_to_game[img] = gn
-        all_raw_texts[img] = raw_text
-        if gn and not folder_game_name:
-            folder_game_name = gn
-
-    return (folder_game_name, image_to_game, all_raw_texts)
 
 
 # ------------------------------------------------------------------ #
 # 主窗口
 # ------------------------------------------------------------------ #
 class MainWindow:
-    """主窗口类（批量模式）"""
+    """主窗口类（整合版）"""
 
     def __init__(self):
         self.config = Config()
@@ -439,11 +255,11 @@ class MainWindow:
         else:
             self.window = tk.Tk()
 
-        self.window.title("软著文档生成工具（批量）")
+        self.window.title("软著文档生成工具")
         self.window.configure(bg='#f0f0f0')
 
-        self.window_width = self.config.get('gui.window_width', 860)
-        self.window_height = self.config.get('gui.window_height', 620)
+        self.window_width = self.config.get('gui.window_width', 1000)
+        self.window_height = self.config.get('gui.window_height', 1000)
         self.setup_window_geometry()
 
         self.processing_thread = None
@@ -453,9 +269,30 @@ class MainWindow:
 
         self.setup_styles()
         self.create_widgets()
-        self.load_config()
+   
 
-        logger.info("GUI 主窗口初始化完成（批量模式）")
+  # 在 load_config 之前，先设置模板目录的默认配置（如果为空）
+        self._set_default_template_dir()
+        
+        self.load_config()
+        
+        logger.info("GUI 主窗口初始化完成（整合版）")
+
+
+    def _set_default_template_dir(self):
+        """设置默认模板目录"""
+        script_dir = Path(__file__).parent.parent.parent  # 项目根目录
+        default_template_dir = script_dir / "VIVO小游戏资质模版"
+        
+        # 检查当前配置中是否有模板目录
+        current_template = self.config.get_last_path('template_dir')
+        if not current_template and default_template_dir.exists():
+            self.config.set_last_path('template_dir', str(default_template_dir))
+            logger.info(f"默认模板目录已设置: {default_template_dir}")
+        elif current_template:
+            logger.info(f"当前模板目录: {current_template}")
+        else:
+            logger.warning(f"默认模板目录不存在: {default_template_dir}")
 
     # ---------------------------------------------------------------- #
     # 窗口基础
@@ -536,190 +373,401 @@ class MainWindow:
     # 构建界面
     # ---------------------------------------------------------------- #
     def create_widgets(self):
-        self.main_frame = ttk.Frame(self.window, padding="10")
-        self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame = ttk.Frame(self.window, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(0, weight=1)
-        self.main_frame.columnconfigure(1, weight=1)
-
+        main_frame.columnconfigure(0, weight=1)
+        
         # 标题
         ttk.Label(
-            self.main_frame, text="软著文档生成工具（批量）",
+            main_frame, text="软著文档生成工具",
             font=("Arial", 18, "bold")
-        ).grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        ).grid(row=0, column=0, pady=(0, 10))
 
-        # ---- 文件夹选择框架 ----
-        dir_frame = ttk.LabelFrame(self.main_frame, text="文件夹选择（支持拖拽）", padding="10")
-        dir_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-        dir_frame.columnconfigure(1, weight=1)
+        # 创建主内容区域
+        self._build_main_content(main_frame)
 
-        rows_cfg = [
-            ("渠广文件夹（含 txt）:", 'qg_dir',      'qg_dir',      self._select_qg_dir),
-            ("软著文件夹（含 pdf）:", 'softdoc_dir', 'softdoc_dir', self._select_softdoc_dir),
-            ("模板目录:",            'template',    'template',    self.select_template_dir),
-            ("输出目录:",            'output',      'output',      self.select_output_dir),
-        ]
-
-        self._entries = {}
-        for i, (label_text, attr_name, path_type, cmd) in enumerate(rows_cfg):
-            ttk.Label(dir_frame, text=label_text).grid(row=i, column=0, sticky=tk.W, pady=5, padx=(0, 5))
-            entry = ttk.Entry(dir_frame, width=55)
-            entry.grid(row=i, column=1, padx=5, pady=5, sticky=(tk.W, tk.E))
-            self.setup_drag_drop(entry, path_type)
-            ttk.Button(dir_frame, text="浏览...", command=cmd, width=10).grid(row=i, column=2, padx=5)
-            self._entries[attr_name] = entry
-
-        # 提示
-        ttk.Label(
-            dir_frame,
-            text="提示：渠广文件名格式为「游戏名_xxx.txt」，软著文件名以游戏名开头即可自动匹配",
-            foreground="gray", wraplength=620, justify=tk.LEFT
-        ).grid(row=len(rows_cfg), column=0, columnspan=3, pady=(5, 0), sticky=tk.W)
-
-        # ---- 匹配预览框架 ----
-        preview_frame = ttk.LabelFrame(self.main_frame, text="文件匹配预览", padding="8")
-        preview_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        preview_frame.columnconfigure(0, weight=1)
-        preview_frame.rowconfigure(0, weight=1)
-        self.main_frame.rowconfigure(2, weight=1)
-
-        self.preview_text = tk.Text(
-            preview_frame, height=8, width=80, state='disabled',
-            font=("Consolas", 9), bg="#fafafa", relief=tk.FLAT
+    def _build_main_content(self, parent):
+        # 创建可滚动的主框架
+        canvas = tk.Canvas(parent, bg='#f0f0f0', highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        scrollbar = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.preview_text.yview)
-        self.preview_text.configure(yscrollcommand=scrollbar.set)
-        self.preview_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-
-        # ---- 高级设置 ----
-        setting_frame = ttk.LabelFrame(self.main_frame, text="高级设置", padding="10")
-        setting_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
-
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
+        parent.rowconfigure(1, weight=1)
+        parent.columnconfigure(0, weight=1)
+        
+        # === 路径配置区域 ===
+        path_frame = ttk.LabelFrame(scrollable_frame, text="路径配置", padding="10")
+        path_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        path_frame.columnconfigure(1, weight=1)
+        
+        path_configs = [
+            ("软著文件夹:", 'softdoc_dir', '选择软著文件夹'),
+            ("user.xlsx:", 'user_xlsx', '选择 user.xlsx（账号信息）'),
+            ("game.xlsx 保存路径:", 'game_xlsx', '选择 game.xlsx 保存目录'),
+            ("渠广输出文件夹:", 'qg_output_dir', '选择渠广输出文件夹'),
+            ("模板目录:", 'template_dir', '选择文档模板目录'),
+            ("最终文档输出目录:", 'output_dir', '选择最终文档输出目录'),
+        ]
+        
+        self.entries = {}
+        for i, (label, key, tip) in enumerate(path_configs):
+            ttk.Label(path_frame, text=label, width=18, anchor='e').grid(
+                row=i, column=0, sticky=tk.E, pady=4, padx=(0, 5))
+            ent = ttk.Entry(path_frame, width=60)
+            ent.grid(row=i, column=1, padx=5, pady=4, sticky=(tk.W, tk.E))
+            self.setup_drag_drop(ent, key)
+            self.entries[key] = ent
+            
+            def _make_browse(k=key, t=tip):
+                def _browse():
+                    if k == 'user_xlsx':
+                        p = tk.filedialog.askopenfilename(
+                            title=t, 
+                            filetypes=[("Excel 文件", "*.xlsx *.xls"), ("所有文件", "*.*")]
+                        )
+                    elif k == 'game_xlsx':
+                        p = tk.filedialog.askdirectory(title=t)
+                        if p:
+                            p = os.path.join(p, "game.xlsx")
+                    else:
+                        p = tk.filedialog.askdirectory(title=t)
+                    
+                    if p:
+                        self.entries[k].delete(0, tk.END)
+                        self.entries[k].insert(0, p)
+                        self.config.set_last_path(k, p)
+                return _browse
+            ttk.Button(path_frame, text="浏览...", command=_make_browse(), width=8).grid(
+                row=i, column=2, padx=5)
+        
+        # === 一键生成按钮（放在广告类型之前，显眼位置）===
+        onekey_frame = ttk.Frame(scrollable_frame)
+        onekey_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 10))
+        
+        self.onekey_btn = ttk.Button(
+            onekey_frame, 
+            text="🚀 一键生成（完整流程：扫描软著 → 生成渠广 → 生成文档）",
+            command=self.onekey_generate,
+            style="Accent.TButton", 
+            width=80
+        )
+        self.onekey_btn.pack(pady=10)
+        
+        # === 广告类型配置区域 ===
+        ads_frame = ttk.LabelFrame(scrollable_frame, text="广告位类型（生成渠广时使用）", padding="10")
+        ads_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        self.ads_vars = {}
+        self.ads_num = {}
+        self.ads_text = {}
+        
+        ads_defs = [
+            ('open',      True, '1', 'H5-开屏',     0, 0),
+            ('banner',    True, '1', 'H5-banner',   0, 3),
+            ('reward',    True, '1', 'H5-激励视频',  1, 0),
+            ('ori',       True, '1', 'H5-结算模版',  1, 3),
+            ('ori_other', True, '1', 'H5-其它模版',  2, 3),
+        ]
+        ad_label_map = {
+            'open': '开屏', 'banner': 'banner',
+            'reward': '激励', 'ori': '原生(结算)', 'ori_other': '原生(其它)'
+        }
+        
+        for ad_key, default_on, default_num, default_text, row, col in ads_defs:
+            var = tk.BooleanVar(value=default_on)
+            self.ads_vars[ad_key] = var
+            cb = ttk.Checkbutton(ads_frame, text=ad_label_map[ad_key], variable=var)
+            cb.grid(row=row, column=col, sticky=tk.W, padx=(5, 0), pady=2)
+            
+            num_ent = ttk.Entry(ads_frame, width=5)
+            num_ent.insert(0, default_num)
+            num_ent.grid(row=row, column=col+1, sticky=tk.W, padx=2)
+            self.ads_num[ad_key] = num_ent
+            
+            txt_ent = ttk.Entry(ads_frame, width=12)
+            txt_ent.insert(0, default_text)
+            txt_ent.grid(row=row, column=col+2, sticky=tk.W, padx=2)
+            self.ads_text[ad_key] = txt_ent
+        
+        # === 高级设置区域 ===
+        setting_frame = ttk.LabelFrame(scrollable_frame, text="高级设置", padding="10")
+        setting_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        
         ttk.Label(setting_frame, text="OCR 语言:").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.ocr_combo = ttk.Combobox(setting_frame, values=['chi_sim+eng', 'chi_sim', 'eng'], width=20, state='readonly')
         self.ocr_combo.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
         self.ocr_combo.set('chi_sim+eng')
-
+        
         ttk.Label(setting_frame, text="授权年限:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(20, 0))
         self.years_spin = ttk.Spinbox(setting_frame, from_=1, to=30, width=10)
         self.years_spin.grid(row=0, column=3, padx=5, pady=5, sticky=tk.W)
         self.years_spin.set('10')
-
-        # ---- 按钮区 ----
-        btn_frame = ttk.Frame(self.main_frame)
-        btn_frame.grid(row=4, column=0, columnspan=3, pady=(5, 0))
-
-        self.preview_button = ttk.Button(btn_frame, text="预览匹配", command=self._preview_match, width=14)
-        self.preview_button.grid(row=0, column=0, padx=5)
-        self.start_button = ttk.Button(
-            btn_frame, text="批量生成文档", command=self.start_processing,
-            style="Accent.TButton", width=18
+        
+        # === 匹配预览区域 ===
+        preview_frame = ttk.LabelFrame(scrollable_frame, text="匹配预览", padding="8")
+        preview_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        preview_frame.columnconfigure(0, weight=1)
+        preview_frame.rowconfigure(0, weight=1)
+        
+        self.preview_text = tk.Text(
+            preview_frame, height=8, width=80, state='disabled',
+            font=("Consolas", 9), bg="#fafafa", relief=tk.FLAT
         )
-        self.start_button.grid(row=0, column=1, padx=5, pady=10)
-        ttk.Button(btn_frame, text="保存配置", command=self.save_config, width=12).grid(row=0, column=2, padx=5)
-
+        scrollbar_preview = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.preview_text.yview)
+        self.preview_text.configure(yscrollcommand=scrollbar_preview.set)
+        self.preview_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar_preview.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # === 功能按钮区域（小按钮）===
+        btn_frame = ttk.Frame(scrollable_frame)
+        btn_frame.grid(row=5, column=0, pady=(5, 10))
+        
+        self.scan_btn = ttk.Button(
+            btn_frame, text="① 扫描软著 → 生成 game.xlsx",
+            command=self.scan_softdoc, width=28
+        )
+        self.scan_btn.grid(row=0, column=0, padx=5)
+        
+        self.gen_qg_btn = ttk.Button(
+            btn_frame, text="② 生成渠广 txt 文件",
+            command=self.generate_qg, width=22
+        )
+        self.gen_qg_btn.grid(row=0, column=1, padx=5)
+        
+        # self.preview_btn = ttk.Button(
+        #     btn_frame, text="预览匹配", command=self.preview_match, width=14
+        # )
+        # self.preview_btn.grid(row=0, column=2, padx=5)
+        
+        self.batch_btn = ttk.Button(
+            btn_frame, text="批量生成文档",
+            command=self.batch_generate_documents,
+            width=18
+        )
+        self.batch_btn.grid(row=0, column=3, padx=5)
+        
+        # === 日志区域 ===
+        log_frame = ttk.LabelFrame(scrollable_frame, text="日志", padding="5")
+        log_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        
+        self.log_text = tk.Text(
+            log_frame, height=12, state='disabled',
+            font=("Consolas", 9), bg="#fafafa", relief=tk.FLAT
+        )
+        log_scroll = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        log_scroll.grid(row=0, column=1, sticky=(tk.N, tk.S))
     # ---------------------------------------------------------------- #
-    # 目录浏览
+    # 日志方法
     # ---------------------------------------------------------------- #
-    def _select_dir(self, entry_key, title, config_key):
-        cur = self._entries[entry_key].get()
-        directory = filedialog.askdirectory(title=title, initialdir=cur if cur else '.')
-        if directory:
-            self._entries[entry_key].delete(0, tk.END)
-            self._entries[entry_key].insert(0, directory)
-            self.config.set_last_path(config_key, directory)
+    def log_append(self, msg: str):
+        def _do():
+            self.log_text.config(state='normal')
+            self.log_text.insert(tk.END, msg + "\n")
+            self.log_text.see(tk.END)
+            self.log_text.config(state='disabled')
+        self.window.after(0, _do)
 
-    def _select_qg_dir(self):
-        self._select_dir('qg_dir', '选择渠广文件夹', 'qg_dir')
-
-    def _select_softdoc_dir(self):
-        self._select_dir('softdoc_dir', '选择软著文件夹', 'softdoc_dir')
-
-    def select_template_dir(self):
-        self._select_dir('template', '选择模板目录', 'template')
-
-    def select_output_dir(self):
-        self._select_dir('output', '选择输出目录', 'output')
+    def set_preview(self, text: str):
+        def _do():
+            self.preview_text.config(state='normal')
+            self.preview_text.delete('1.0', tk.END)
+            self.preview_text.insert(tk.END, text)
+            self.preview_text.config(state='disabled')
+        self.window.after(0, _do)
 
     # ---------------------------------------------------------------- #
     # 配置存取
     # ---------------------------------------------------------------- #
     def load_config(self):
         try:
-            self._entries['qg_dir'].delete(0, tk.END)
-            self._entries['qg_dir'].insert(0, self.config.get_last_path('qg_dir'))
-
-            self._entries['softdoc_dir'].delete(0, tk.END)
-            self._entries['softdoc_dir'].insert(0, self.config.get_last_path('softdoc_dir'))
-
-            self._entries['template'].delete(0, tk.END)
-            self._entries['template'].insert(0, self.config.get_last_path('template'))
-
-            self._entries['output'].delete(0, tk.END)
-            self._entries['output'].insert(0, self.config.get_last_path('output'))
-
+            for key, entry in self.entries.items():
+                val = self.config.get_last_path(key)
+                if val:
+                    entry.delete(0, tk.END)
+                    entry.insert(0, val)
+            
             self.ocr_combo.set(self.config.get_processing_config('ocr_language', 'chi_sim+eng'))
             self.years_spin.delete(0, tk.END)
             self.years_spin.insert(0, str(self.config.get_processing_config('authorization_years', 10)))
         except Exception as e:
             logger.error(f"加载配置失败: {e}")
 
-    def save_config(self):
-        try:
-            for key in ('qg_dir', 'softdoc_dir', 'template', 'output'):
-                val = self._entries[key].get()
-                if val:
-                    self.config.set_last_path(key, val)
-            self.config.set_processing_config('ocr_language', self.ocr_combo.get())
-            try:
-                self.config.set_processing_config('authorization_years', int(self.years_spin.get()))
-            except ValueError:
-                pass
-            if self.config.save_config():
-                messagebox.showinfo("保存成功", "配置已保存")
-            else:
-                messagebox.showerror("保存失败", "配置保存失败")
-        except Exception as e:
-            messagebox.showerror("保存失败", str(e))
+    def get_ads_config(self) -> dict:
+        ads = {}
+        for ad_key, var in self.ads_vars.items():
+            if var.get():
+                try:
+                    num = int(self.ads_num[ad_key].get())
+                except ValueError:
+                    num = 1
+                ads[ad_key] = {
+                    'number': num,
+                    'text': self.ads_text[ad_key].get().strip()
+                }
+        return ads
 
     # ---------------------------------------------------------------- #
-    # 匹配预览
+    # 步骤1：扫描软著 → 生成 game.xlsx
     # ---------------------------------------------------------------- #
-    def _preview_match(self):
-        qg_dir = self._entries['qg_dir'].get().strip()
-        softdoc_dir = self._entries['softdoc_dir'].get().strip()
+    def scan_softdoc(self):
+        softdoc_dir = self.entries['softdoc_dir'].get().strip()
+        game_xlsx_input = self.entries['game_xlsx'].get().strip()
 
-        errors = []
-        if not qg_dir or not os.path.isdir(qg_dir):
-            errors.append("渠广文件夹不存在或未选择")
         if not softdoc_dir or not os.path.isdir(softdoc_dir):
-            errors.append("软著文件夹不存在或未选择")
-        if errors:
-            messagebox.showerror("路径错误", "\n".join(errors))
+            messagebox.showerror("错误", "请先选择软著文件夹")
+            return
+        if not game_xlsx_input:
+            messagebox.showerror("错误", "请先选择 game.xlsx 保存路径")
             return
 
-        # OCR + 匹配放到子线程里执行，避免 GUI 无响应
-        self._set_preview("正在OCR识别图片并匹配，请稍候...")
-        self.preview_button.config(state='disabled')
+        game_xlsx = os.path.normpath(game_xlsx_input)
+        if os.path.isdir(game_xlsx):
+            game_xlsx = os.path.join(game_xlsx, "game.xlsx")
+        elif not game_xlsx.lower().endswith('.xlsx'):
+            game_xlsx += ".xlsx"
+        
+        target_dir = os.path.dirname(game_xlsx)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
 
-        def _do_preview():
-            print("【DEBUG】_do_preview 开始执行")
+        self.log_append("=" * 60)
+        self.log_append(f"开始扫描软著文件夹: {softdoc_dir}")
+        self.log_append(f"game.xlsx 将保存至: {game_xlsx}")
+
+        self.scan_btn.config(state='disabled', text="扫描中...")
+
+        def _worker():
             try:
                 from core.api_ocr import VolcEngineOCR
-                api_key = self.config.get('advanced.volc_api_key', 'a0081937-958a-44d4-8144-f713d09ada03')
-                print(f"【DEBUG】API Key: {api_key[:10]}...")
+                from core.vivo_workflow import VivoWorkflow, generate_game_xlsx
+                api_key = self.config.get('advanced.volc_api_key', '374bc8a8-b92c-4e1c-a839-6f6d51f61b8c')
                 api_ocr = VolcEngineOCR(api_key=api_key)
-                print(f"【DEBUG】VolcEngineOCR 实例创建成功")
-                matcher = BatchFileMatcher(qg_dir, softdoc_dir)
-                print(f"【DEBUG】开始调用 matcher.match()")
-                result = matcher.match(api_ocr=api_ocr)
-                print(f"【DEBUG】matcher.match() 完成，结果: matched={len(result.get('matched', []))}")
+                wf = VivoWorkflow(config=self.config)
+                infos = wf.scan_softdoc_folder(softdoc_dir, api_ocr=api_ocr, log_cb=self.log_append)
+                if not infos:
+                    self.log_append("未提取到任何软著信息，请检查文件夹内容")
+                    return
+                ok = generate_game_xlsx(infos, game_xlsx)
+                if ok:
+                    self.log_append(f"\n✓ game.xlsx 已生成: {game_xlsx}")
+                    messagebox.showinfo("完成", f"game.xlsx 已生成！\n路径：{game_xlsx}")
+                else:
+                    self.log_append("✗ game.xlsx 生成失败")
             except Exception as e:
-                print(f"【DEBUG】_do_preview 异常: {e}")
+                self.log_append(f"✗ 扫描失败: {e}")
                 import traceback
                 traceback.print_exc()
+            finally:
+                self.window.after(0, lambda: self.scan_btn.config(state='normal', text="① 扫描软著 → 生成 game.xlsx"))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    # ---------------------------------------------------------------- #
+    # 步骤2：生成渠广 txt 文件
+    # ---------------------------------------------------------------- #
+    def generate_qg(self):
+        game_xlsx = self.entries['game_xlsx'].get().strip()
+        user_xlsx = self.entries['user_xlsx'].get().strip()
+        qg_out_dir = self.entries['qg_output_dir'].get().strip()
+
+        errors = []
+        if not game_xlsx or not os.path.exists(game_xlsx):
+            errors.append("game.xlsx 不存在，请先执行扫描")
+        if not user_xlsx or not os.path.exists(user_xlsx):
+            errors.append("user.xlsx 不存在，请先选择账号文件")
+        if not qg_out_dir:
+            errors.append("请先选择渠广输出文件夹")
+        if errors:
+            messagebox.showerror("参数错误", "\n".join(errors))
+            return
+
+        # 处理路径
+        if os.path.isdir(game_xlsx):
+            game_xlsx = os.path.join(game_xlsx, "game.xlsx")
+        if os.path.isdir(user_xlsx):
+            user_xlsx = os.path.join(user_xlsx, "user.xlsx")
+
+        ads_config = self.get_ads_config()
+        if not ads_config:
+            messagebox.showwarning("提示", "未选择任何广告类型，请至少勾选一种")
+            return
+
+        self.log_append("=" * 60)
+        self.log_append("开始生成渠广文件...")
+        self.gen_qg_btn.config(state='disabled', text="生成中...")
+
+        def _worker():
+            try:
+                from core.vivo_workflow import VivoWorkflow
+                wf = VivoWorkflow(config=self.config)
+                files = wf.generate_qg_files(
+                    game_xlsx_path=game_xlsx,
+                    user_xlsx_path=user_xlsx,
+                    output_dir=qg_out_dir,
+                    ads_config=ads_config,
+                    log_cb=self.log_append
+                )
+                self.window.after(0, lambda: self._on_qg_done(files, qg_out_dir))
+            except Exception as e:
+                self.log_append(f"✗ 生成失败: {e}")
+                import traceback
+                traceback.print_exc()
+                self.window.after(0, lambda: self.gen_qg_btn.config(state='normal', text="② 生成渠广 txt 文件"))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_qg_done(self, files: list, qg_out_dir: str):
+        self.gen_qg_btn.config(state='normal', text="② 生成渠广 txt 文件")
+        self.log_append(f"\n✓ 渠广生成完成，共 {len(files)} 个文件")
+        if files:
+            self.log_append("已生成：")
+            for f in files:
+                self.log_append(f"  {os.path.basename(f)}")
+        messagebox.showinfo("完成", f"渠广文件生成完成！\n共 {len(files)} 个\n输出目录：{qg_out_dir}")
+
+    # ---------------------------------------------------------------- #
+    # 预览匹配
+    # ---------------------------------------------------------------- #
+    def preview_match(self):
+        qg_dir = self.entries['qg_output_dir'].get().strip()
+        softdoc_dir = self.entries['softdoc_dir'].get().strip()
+
+        if not qg_dir or not os.path.isdir(qg_dir):
+            messagebox.showerror("错误", "渠广输出文件夹不存在或未选择")
+            return
+        if not softdoc_dir or not os.path.isdir(softdoc_dir):
+            messagebox.showerror("错误", "软著文件夹不存在或未选择")
+            return
+
+        self.set_preview("正在OCR识别图片并匹配，请稍候...")
+        self.preview_btn.config(state='disabled')
+
+        def _do_preview():
+            try:
+                from core.api_ocr import VolcEngineOCR
+                api_key = self.config.get('advanced.volc_api_key', '374bc8a8-b92c-4e1c-a839-6f6d51f61b8c')
+                api_ocr = VolcEngineOCR(api_key=api_key)
+                matcher = BatchFileMatcher(qg_dir, softdoc_dir)
+                result = matcher.match(api_ocr=api_ocr)
+            except Exception as e:
                 result = {'matched': [], 'qg_only': [], 'softdoc_only': []}
+                print(f"预览匹配异常: {e}")
 
             lines = []
             lines.append(f"=== 匹配结果 ===")
@@ -742,45 +790,23 @@ class MainWindow:
                     gn = BatchFileMatcher.extract_game_name_from_qg(qp)
                     lines.append(f"  [{gn}] {os.path.basename(qp)}")
 
-            if result['softdoc_only']:
-                lines.append("")
-                lines.append("--- 软著有、渠广未匹配（不处理）---")
-                for sp in result['softdoc_only']:
-                    lines.append(f"  {os.path.basename(sp)}")
-
-            # 匹配结果回写到 GUI
-            text = '\n'.join(lines)
-            self.window.after(0, lambda: self._show_preview_result(text))
+            self.set_preview('\n'.join(lines))
+            self.window.after(0, lambda: self.preview_btn.config(state='normal'))
 
         threading.Thread(target=_do_preview, daemon=True).start()
 
-    def _show_preview_result(self, text: str):
-        self._set_preview(text)
-        self.preview_button.config(state='normal')
-
-    def _set_preview(self, text: str):
-        self.preview_text.config(state='normal')
-        self.preview_text.delete('1.0', tk.END)
-        self.preview_text.insert(tk.END, text)
-        self.preview_text.config(state='disabled')
-
     # ---------------------------------------------------------------- #
-    # 批量处理入口
+    # 批量生成文档
     # ---------------------------------------------------------------- #
-    def start_processing(self):
-        qg_dir = self._entries['qg_dir'].get().strip()
-        softdoc_dir = self._entries['softdoc_dir'].get().strip()
-        template_dir = self._entries['template'].get().strip()
-        output_dir = self._entries['output'].get().strip()
-        ocr_language = self.ocr_combo.get()
-        try:
-            auth_years = int(self.years_spin.get())
-        except ValueError:
-            auth_years = 10
+    def batch_generate_documents(self):
+        qg_dir = self.entries['qg_output_dir'].get().strip()
+        softdoc_dir = self.entries['softdoc_dir'].get().strip()
+        template_dir = self.entries['template_dir'].get().strip()
+        output_dir = self.entries['output_dir'].get().strip()
 
         errors = []
         if not qg_dir or not os.path.isdir(qg_dir):
-            errors.append("渠广文件夹不存在或未选择")
+            errors.append("渠广输出文件夹不存在或未选择")
         if not softdoc_dir or not os.path.isdir(softdoc_dir):
             errors.append("软著文件夹不存在或未选择")
         if not template_dir or not os.path.isdir(template_dir):
@@ -791,303 +817,264 @@ class MainWindow:
             messagebox.showerror("输入错误", "\n".join(errors))
             return
 
-        # 禁用按钮，提示用户正在匹配
-        self.start_button.config(state='disabled', text="匹配中...")
-
-        def _do_match():
-            # 子线程里做 OCR + 匹配，避免卡 GUI
-            print("【DEBUG】_do_match 开始执行")
+        self.batch_btn.config(state='disabled', text="生成中...")
+        
+        def _worker():
             try:
                 from core.api_ocr import VolcEngineOCR
-                api_key = self.config.get('advanced.volc_api_key', 'a0081937-958a-44d4-8144-f713d09ada03')
-                print(f"【DEBUG】API Key: {api_key[:10]}...")
+                api_key = self.config.get('advanced.volc_api_key', '374bc8a8-b92c-4e1c-a839-6f6d51f61b8c')
                 api_ocr = VolcEngineOCR(api_key=api_key)
-                print(f"【DEBUG】VolcEngineOCR 实例创建成功: {type(api_ocr)}")
-                matcher = BatchFileMatcher(qg_dir, softdoc_dir)
-                print(f"【DEBUG】开始调用 matcher.match()")
-                result = matcher.match(api_ocr=api_ocr)
-                print(f"【DEBUG】matcher.match() 完成，结果: matched={len(result.get('matched', []))}")
+                self._do_batch_generate(qg_dir, softdoc_dir, template_dir, output_dir, api_ocr)
             except Exception as e:
-                print(f"【DEBUG】_do_match 异常: {e}")
+                self.log_append(f"批量生成失败: {e}")
                 import traceback
                 traceback.print_exc()
-                result = {'matched': [], 'qg_only': [], 'softdoc_only': []}
-            # match 结果回到主线程，决定后续动作
-            self.window.after(0, lambda r=result: self._on_match_done(
-                r, template_dir, output_dir, ocr_language, auth_years, api_ocr
-            ))
+            finally:
+                self.window.after(0, lambda: self.batch_btn.config(state='normal', text="批量生成文档"))
 
-        threading.Thread(target=_do_match, daemon=True).start()
+        threading.Thread(target=_worker, daemon=True).start()
 
-    def _on_match_done(self, match_result, template_dir, output_dir,
-                       ocr_language, auth_years, api_ocr):
-        """match 结果回到主线程：无匹配则弹警告，有匹配则开始处理"""
-        if not match_result['matched']:
-            self.start_button.config(state='normal', text="批量生成文档")
-            
-            # ===== 在预览区显示详细的匹配信息，帮助调试 =====
-            lines = []
-            lines.append("=== 匹配结果（调试信息）===")
-            lines.append(f"渠广目录: {self._entries['qg_dir'].get()}")
-            lines.append(f"软著目录: {self._entries['softdoc_dir'].get()}")
-            lines.append("")
-            lines.append(f"渠广文件总数: {len(match_result['qg_only'])}")
-            for qp in match_result['qg_only']:
-                gn = BatchFileMatcher.extract_game_name_from_qg(qp)
-                lines.append(f"  未匹配: {os.path.basename(qp)} (提取游戏名: '{gn}')")
-            
-            lines.append("")
-            lines.append(f"软著文件总数: {len(match_result['softdoc_only'])}")
-            for sp in match_result['softdoc_only']:
-                lines.append(f"  未匹配: {os.path.basename(sp)}")
-            
-            lines.append("")
-            lines.append(">>> 请查看上方日志或控制台，了解详细匹配过程")
-            lines.append(">>> 匹配规则：软著文件名必须以渠广提取的游戏名开头")
-            
-            self._set_preview('\n'.join(lines))
-            
-            # 同时打印到控制台
-            import sys
-            detail = '\n'.join(lines)
-            print(detail)
-            if hasattr(sys, 'stderr'):
-                sys.stderr.write(detail + '\n')
-            
-            messagebox.showwarning("无可处理文件",
-                "未找到任何匹配的渠广+软著文件对，请查看上方预览区的调试信息。")
-            return
-
-        os.makedirs(output_dir, exist_ok=True)
-
-        # 禁用按钮，打开进度窗口
-        self.start_button.config(state='disabled', text="处理中...")
-
-        self.progress_window = tk.Toplevel(self.window)
-        self.progress_window.title("批量处理中")
-        self.progress_window.geometry("440x170")
-        self.progress_window.transient(self.window)
-        self.progress_window.grab_set()
-        x = self.window.winfo_x() + (self.window.winfo_width() - 440) // 2
-        y = self.window.winfo_y() + (self.window.winfo_height() - 170) // 2
-        self.progress_window.geometry(f"440x170+{x}+{y}")
-
-        self.progress_label = ttk.Label(self.progress_window, text="正在初始化...", font=("Arial", 10))
-        self.progress_label.pack(pady=(20, 5))
-
-        self.progress_sub_label = ttk.Label(self.progress_window, text="", font=("Arial", 9), foreground="gray")
-        self.progress_sub_label.pack()
-
-        self.progress_bar = ttk.Progressbar(self.progress_window, mode='determinate', length=380)
-        self.progress_bar.pack(pady=10)
-
-        self.processing_thread = threading.Thread(
-            target=self._batch_process,
-            args=(match_result['matched'], template_dir, output_dir, ocr_language, auth_years, api_ocr,
-                  match_result.get('all_ocr_texts', {})),
-            daemon=True
-        )
-        self.processing_thread.start()
-
-    # ---------------------------------------------------------------- #
-    # 批量处理后台线程
-    # ---------------------------------------------------------------- #
-    def _batch_process(self, matched: list, template_dir: str, output_dir: str,
-                       ocr_language: str, auth_years: int, api_ocr=None,
-                       cached_ocr_texts: Dict[str, str] = None):
-        import time
+    def _do_batch_generate(self, qg_dir, softdoc_dir, template_dir, output_dir, api_ocr):
         from core.qg_parser import QGParser
         from core.softdoc_parser import SoftDocParser
         from core.document_generator import DocumentGenerator
-
-        step_timer = time.time()
-        print(f"\n{'='*60}")
-        print(f"【BATCH DEBUG】批处理开始，共 {len(matched)} 个匹配项")
-        print(f"【BATCH DEBUG】cached_ocr_texts 传入: {len(cached_ocr_texts) if cached_ocr_texts else 0} 个")
-        print(f"{'='*60}\n")
-
-        self.config.set_processing_config('ocr_language', ocr_language)
-        self.config.set_processing_config('authorization_years', auth_years)
-
-        total = len(matched)
-        success_list = []
-        fail_list = []
-
+        
+        self.log_append("正在匹配渠广文件和软著文件夹...")
+        matcher = BatchFileMatcher(qg_dir, softdoc_dir)
+        match_result = matcher.match(api_ocr=api_ocr)
+        
+        if not match_result['matched']:
+            self.log_append("❌ 未找到任何匹配的渠广+软著文件对")
+            return
+        
+        self.log_append(f"✅ 匹配成功 {len(match_result['matched'])} 组")
+        
+        # 打印缓存信息
+        cached_ocr = match_result.get('all_ocr_texts', {})
+        self.log_append(f"📦 OCR 缓存数量: {len(cached_ocr)}")
+        if cached_ocr:
+            self.log_append(f"   缓存键示例: {list(cached_ocr.keys())[:3]}")
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
         qg_parser = QGParser(self.config)
-        soft_parser = SoftDocParser(self.config, external_api_ocr=api_ocr, cached_ocr_texts=cached_ocr_texts)
+        
+        self.log_append("创建 SoftDocParser（传递缓存）...")
+        soft_parser = SoftDocParser(
+            self.config, 
+            external_api_ocr=api_ocr, 
+            cached_ocr_texts=cached_ocr  # 传递缓存
+        )
+        
         generator = DocumentGenerator(self.config)
         generator.set_template_dir(template_dir)
         generator.set_output_dir(output_dir)
-
-        for idx, (qp, sp, game_name) in enumerate(matched, 1):
-            item_timer = time.time()
-            print(f"\n--- [{idx}/{total}] 开始处理: {game_name} ---")
-
-            self._update_progress_batch(
-                f"正在处理 ({idx}/{total})：{game_name}",
-                f"渠广: {os.path.basename(qp)}",
-                int((idx - 1) / total * 100)
-            )
-
+        
+        total = len(match_result['matched'])
+        success_list = []
+        fail_list = []
+        
+        for idx, (qp, sp, game_name) in enumerate(match_result['matched'], 1):
+            self.log_append(f"\n[{idx}/{total}] 处理: {game_name}")
+            self.log_append(f"  渠广文件: {qp}")
+            self.log_append(f"  软著文件夹: {sp}")
+            
             try:
-                # ===== 1. 解析渠广 =====
-                step_timer = time.time()
-                print(f"【{idx}】[1/4] 解析渠广: {os.path.basename(qp)}")
+                self.log_append("  📖 解析渠广文件...")
                 game_info = qg_parser.parse_file(qp)
-                print(f"【{idx}】[1/4] 渠广解析完成，耗时: {time.time()-step_timer:.2f}s")
-
-                # ===== 2. 筛选属于当前文件夹的 OCR 缓存 =====
-                step_timer = time.time()
-                folder_cached = {}
-                if cached_ocr_texts:
-                    import os as _os
-                    # 标准化路径用于比较（统一用正斜杠）
-                    sp_norm = sp.replace('\\', '/')
-                    for img_path, ocr_text in cached_ocr_texts.items():
-                        img_dir = _os.path.dirname(img_path).replace('\\', '/')
-                        if img_dir == sp_norm:
-                            folder_cached[img_path] = ocr_text
-                    print(f"【{idx}】[2/4] OCR缓存筛选: {len(folder_cached)}/{len(cached_ocr_texts)} 个文件命中")
-                else:
-                    print(f"【{idx}】[2/4] OCR缓存为空，跳过筛选")
-                print(f"【{idx}】[2/4] 筛选完成，耗时: {time.time()-step_timer:.2f}s")
-
-                # ===== 3. 解析软著 =====
-                step_timer = time.time()
-                print(f"\n{'='*60}")
-                print(f"【{idx}】[3/4] 开始解析软著文件夹")
-                print(f"  游戏名(渠广): {game_name}")
-                print(f"  软著文件夹: {sp}")
-                print(f"  OCR缓存文件数: {len(folder_cached)}")
-                if folder_cached:
-                    for img_path, text in folder_cached.items():
-                        print(f"    - {os.path.basename(img_path)}: {len(text)} 字符")
-                print(f"{'='*60}")
+                self.log_append(f"    游戏名: {game_info.get('game_name')}")
+                self.log_append(f"    包名: {game_info.get('package_name')}")
                 
-                try:
-                    soft_info = soft_parser.parse_from_folder(sp, game_name, cached_ocr_texts=folder_cached)
-                    print(f"【{idx}】[3/4] 软著解析完成")
-                    print(f"  >>> 解析结果:")
-                    print(f"      软件名称: {soft_info.get('software_name', '')}")
-                    print(f"      著作权人: {soft_info.get('copyright_holder', '')}")
-                    print(f"      登记号: {soft_info.get('registration_number', '')}")
-                    # 关键检查：软著名是否包含游戏名
-                    soft_name = soft_info.get('software_name', '')
-                    if soft_name and game_name and game_name not in soft_name:
-                        print(f"  >>> ⚠️ 警告: 软件名称 '{soft_name}' 不包含游戏名 '{game_name}'")
-                        print(f"      这可能是匹配错误或OCR识别错误!")
-                    print(f"  耗时: {time.time()-step_timer:.2f}s")
-                except Exception as e:
-                    print(f"【{idx}】[3/4] 软著解析异常: {e}，使用默认值")
-                    logger.warning(f"软著解析失败，使用默认值: {e}")
-                    soft_info = {
-                        'software_name': game_info.get('game_name', ''),
-                        'version': game_info.get('version', ''),
-                        'copyright_holder': game_info.get('publisher', ''),
-                        'software_type': '', 'registration_number': '',
-                        'completion_date': '', 'publish_date': '', 'original_text': ''
-                    }
-
-                # 补充缺失
+                # 提取该文件夹对应的缓存
+                folder_cached = {}
+                for img_path, ocr_text in cached_ocr.items():
+                    img_dir = os.path.dirname(img_path).replace('\\', '/')
+                    sp_norm = sp.replace('\\', '/')
+                    if img_dir == sp_norm:
+                        folder_cached[img_path] = ocr_text
+                
+                self.log_append(f"  📦 该文件夹缓存数量: {len(folder_cached)}")
+                self.log_append(f"  🔍 解析软著文件（使用缓存）...")
+                
+                soft_info = soft_parser.parse_from_folder(sp, game_name, cached_ocr_texts=folder_cached)
+                
+                self.log_append(f"    软件名: {soft_info.get('software_name')}")
+                self.log_append(f"    著作权人: {soft_info.get('copyright_holder')}")
+                
                 if not soft_info.get('software_name'):
                     soft_info['software_name'] = game_info.get('game_name', '')
                 if not soft_info.get('copyright_holder'):
                     soft_info['copyright_holder'] = game_info.get('publisher', '')
-
-                # 查找该游戏对应的软著文件（PDF 和图片都支持）
-                import glob as _glob
-                softdoc_files_set = set()  # 用 set 去重，避免 glob 大小写重复匹配
+                
+                # 收集软著文件
+                import glob
                 img_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp')
-                sp_norm = sp.replace('\\', '/')
+                softdoc_files = []
                 game_clean = game_name.replace(' ', '').replace('_', '')
                 
-                # 搜索所有支持的文件类型（只用小写扩展名，Windows 不区分大小写）
                 for ext in ['pdf'] + list(img_exts):
-                    found_files = _glob.glob(os.path.join(sp, f'*.{ext}'))
-                    for f in found_files:
+                    for f in glob.glob(os.path.join(sp, f'*.{ext}')):
                         fname = os.path.basename(f).replace(' ', '').replace('_', '')
                         if game_clean in fname:
-                            # 使用小写路径作为 key 去重
-                            f_lower = f.lower()
-                            if f_lower not in softdoc_files_set:
-                                softdoc_files_set.add(f_lower)
-                                print(f"【{idx}】[4/4] 找到软著文件: {os.path.basename(f)}")
+                            softdoc_files.append(f)
                 
-                # 转换为列表（保持排序）
-                softdoc_files = sorted(softdoc_files_set)
-
-                # ===== 4. 生成文档 =====
-                step_timer = time.time()
-                print(f"【{idx}】[4/4] 开始生成文档...")
+                softdoc_files = sorted(set(softdoc_files))
+                self.log_append(f"  📄 软著文件数量: {len(softdoc_files)}")
+                
+                self.log_append(f"  📝 生成文档...")
                 files = generator.generate_documents(game_info, soft_info, softdoc_files=softdoc_files)
-                print(f"【{idx}】[4/4] 文档生成完成，耗时: {time.time()-step_timer:.2f}s")
-
                 success_list.append((game_name, files))
-                logger.info(f"[{idx}/{total}] 成功: {game_name}, 生成 {len(files)} 个文件")
-                print(f"--- [{idx}/{total}] 完成，总耗时: {time.time()-item_timer:.2f}s ---\n")
-
+                self.log_append(f"  ✅ 成功，生成 {len(files)} 个文件")
+                
             except Exception as e:
-                import traceback
                 fail_list.append((game_name, str(e)))
-                logger.error(f"[{idx}/{total}] 失败: {game_name} — {e}")
+                self.log_append(f"  ❌ 失败: {e}")
+                import traceback
                 traceback.print_exc()
-                print(f"--- [{idx}/{total}] 失败，耗时: {time.time()-item_timer:.2f}s ---\n")
-
-        # 全部完成
-        self.window.after(
-            0, self._on_batch_finished,
-            success_list, fail_list, output_dir, total
-        )
-
-    def _update_progress_batch(self, main_text: str, sub_text: str, pct: int):
-        def _do():
-            if self.progress_label:
-                self.progress_label.config(text=main_text)
-            if hasattr(self, 'progress_sub_label') and self.progress_sub_label:
-                self.progress_sub_label.config(text=sub_text)
-            if self.progress_bar:
-                self.progress_bar['value'] = pct
-        self.window.after(0, _do)
-
-    def update_progress(self, message):
-        def _update():
-            if self.progress_label:
-                self.progress_label.config(text=message)
-        self.window.after(0, _update)
-
-    # ---------------------------------------------------------------- #
-    # 批量完成回调
-    # ---------------------------------------------------------------- #
-    def _on_batch_finished(self, success_list, fail_list, output_dir, total):
-        if self.progress_window:
-            self.progress_window.destroy()
-            self.progress_window = None
-
-        self.start_button.config(state='normal', text="批量生成文档")
-
-        # 更新预览区
-        lines = [f"=== 处理完成 ({total} 组) ===", ""]
-        lines.append(f"成功：{len(success_list)} 个")
-        for name, files in success_list:
-            lines.append(f"  [OK] {name}  ({len(files)} 个文件)")
-
+        
+        self.log_append("\n" + "=" * 50)
+        self.log_append(f"批量生成完成！成功: {len(success_list)}, 失败: {len(fail_list)}")
+        self.log_append(f"输出目录: {output_dir}")
+        
         if fail_list:
-            lines.append("")
-            lines.append(f"失败：{len(fail_list)} 个")
+            self.log_append("\n失败列表:")
             for name, err in fail_list:
-                lines.append(f"  [!!] {name}")
-                lines.append(f"       原因: {err}")
+                self.log_append(f"  - {name}: {err}")
+        
+        messagebox.showinfo("完成", f"批量生成完成！\n成功：{len(success_list)} 个\n失败：{len(fail_list)} 个")
 
-        self._set_preview('\n'.join(lines))
+    # ---------------------------------------------------------------- #
+    # 一键生成
+    # ---------------------------------------------------------------- #
+    def onekey_generate(self):
+        # 检查必要配置
+        softdoc_dir = self.entries['softdoc_dir'].get().strip()
+        user_xlsx = self.entries['user_xlsx'].get().strip()
+        game_xlsx_input = self.entries['game_xlsx'].get().strip()
+        qg_out_dir = self.entries['qg_output_dir'].get().strip()
+        template_dir = self.entries['template_dir'].get().strip()
+        output_dir = self.entries['output_dir'].get().strip()
 
-        # 弹出汇总
-        msg = f"批量处理完成！\n\n成功：{len(success_list)} 个\n失败：{len(fail_list)} 个\n\n输出目录：{output_dir}"
-        if fail_list:
-            msg += f"\n\n失败列表：\n" + "\n".join(f"  {n}" for n, _ in fail_list)
-        messagebox.showinfo("完成", msg)
+        errors = []
+        if not softdoc_dir or not os.path.isdir(softdoc_dir):
+            errors.append("软著文件夹不存在或未选择")
+        if not user_xlsx or not os.path.exists(user_xlsx):
+            errors.append("user.xlsx 不存在，请选择账号文件")
+        if not game_xlsx_input:
+            errors.append("请选择 game.xlsx 保存路径")
+        if not qg_out_dir:
+            errors.append("请选择渠广输出文件夹")
+        if not template_dir or not os.path.isdir(template_dir):
+            errors.append("模板目录不存在或未选择")
+        if not output_dir:
+            errors.append("请选择最终文档输出目录")
+        
+        if errors:
+            messagebox.showerror("参数错误", "\n".join(errors))
+            return
 
-        if os.path.exists(output_dir):
-            os.startfile(output_dir)
+        # 处理 game.xlsx 路径
+        game_xlsx = os.path.normpath(game_xlsx_input)
+        if os.path.isdir(game_xlsx):
+            game_xlsx = os.path.join(game_xlsx, "game.xlsx")
+        elif not game_xlsx.lower().endswith('.xlsx'):
+            game_xlsx += ".xlsx"
+        
+        target_dir = os.path.dirname(game_xlsx)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
+
+        ads_config = self.get_ads_config()
+        if not ads_config:
+            messagebox.showwarning("提示", "未选择任何广告类型，请至少勾选一种")
+            return
+
+        if not messagebox.askyesno("确认", 
+            f"即将执行以下步骤：\n\n"
+            f"1. 扫描软著文件夹 → 生成 {game_xlsx}\n"
+            f"2. 读取 game.xlsx + user.xlsx → 生成渠广文件到 {qg_out_dir}\n"
+            f"3. 匹配渠广+软著 → 生成最终文档到 {output_dir}\n\n"
+            f"是否继续？"):
+            return
+
+        self.onekey_btn.config(state='disabled', text="执行中...")
+        self.scan_btn.config(state='disabled')
+        self.gen_qg_btn.config(state='disabled')
+        self.batch_btn.config(state='disabled')
+        
+        self.log_append("=" * 60)
+        self.log_append("🚀 开始一键生成流程")
+        self.log_append("=" * 60)
+
+        def _worker():
+            try:
+                from core.api_ocr import VolcEngineOCR
+                from core.vivo_workflow import VivoWorkflow, generate_game_xlsx
+                
+                api_key = self.config.get('advanced.volc_api_key', '374bc8a8-b92c-4e1c-a839-6f6d51f61b8c')
+                api_ocr = VolcEngineOCR(api_key=api_key)
+                wf = VivoWorkflow(config=self.config)
+                
+                # 步骤1：扫描软著 → 生成 game.xlsx
+                self.window.after(0, lambda: self.log_append("\n【步骤 1/3】扫描软著文件夹..."))
+                infos = wf.scan_softdoc_folder(softdoc_dir, api_ocr=api_ocr, log_cb=self.log_append)
+                
+                if not infos:
+                    self.window.after(0, lambda: self.log_append("❌ 未提取到任何软著信息，流程终止"))
+                    self.window.after(0, lambda: self._on_onekey_failed())
+                    return
+                
+                ok = generate_game_xlsx(infos, game_xlsx)
+                if not ok:
+                    self.window.after(0, lambda: self.log_append("❌ game.xlsx 生成失败，流程终止"))
+                    self.window.after(0, lambda: self._on_onekey_failed())
+                    return
+                
+                self.window.after(0, lambda: self.log_append(f"✅ game.xlsx 已生成: {game_xlsx}"))
+                
+                # 步骤2：生成渠广 txt 文件
+                self.window.after(0, lambda: self.log_append("\n【步骤 2/3】生成渠广文件..."))
+                files = wf.generate_qg_files(
+                    game_xlsx_path=game_xlsx,
+                    user_xlsx_path=user_xlsx,
+                    output_dir=qg_out_dir,
+                    ads_config=ads_config,
+                    log_cb=self.log_append
+                )
+                
+                if not files:
+                    self.window.after(0, lambda: self.log_append("❌ 渠广文件生成失败，流程终止"))
+                    self.window.after(0, lambda: self._on_onekey_failed())
+                    return
+                
+                self.window.after(0, lambda: self.log_append(f"✅ 渠广文件已生成，共 {len(files)} 个"))
+                
+                # 步骤3：批量生成文档
+                self.window.after(0, lambda: self.log_append("\n【步骤 3/3】批量生成文档..."))
+                self._do_batch_generate(qg_out_dir, softdoc_dir, template_dir, output_dir, api_ocr)
+                
+                self.window.after(0, lambda: self._on_onekey_finished())
+                
+            except Exception as e:
+                self.window.after(0, lambda: self.log_append(f"❌ 一键生成失败: {e}"))
+                import traceback
+                traceback.print_exc()
+                self.window.after(0, lambda: self._on_onekey_failed())
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_onekey_finished(self):
+        self.onekey_btn.config(state='normal', text="🚀 一键生成（完整流程）")
+        self.scan_btn.config(state='normal', text="① 扫描软著 → 生成 game.xlsx")
+        self.gen_qg_btn.config(state='normal', text="② 生成渠广 txt 文件")
+        self.batch_btn.config(state='normal', text="批量生成文档")
+        self.log_append("\n🎉 一键生成完成！")
+
+    def _on_onekey_failed(self):
+        self.onekey_btn.config(state='normal', text="🚀 一键生成（完整流程）")
+        self.scan_btn.config(state='normal', text="① 扫描软著 → 生成 game.xlsx")
+        self.gen_qg_btn.config(state='normal', text="② 生成渠广 txt 文件")
+        self.batch_btn.config(state='normal', text="批量生成文档")
 
     # ---------------------------------------------------------------- #
     # 主循环

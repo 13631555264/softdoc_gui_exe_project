@@ -46,7 +46,7 @@ class Config:
             },
             'gui': {
                 'window_width': 800,
-                'window_height': 600,
+                'window_height': 1000,
                 'theme': 'default',
                 'font_size': 12,
                 'auto_save_config': True,

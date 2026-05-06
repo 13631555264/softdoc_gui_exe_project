@@ -36,7 +36,7 @@ class SoftDocParser:
         if external_api_ocr is not None:
             self.api_ocr = external_api_ocr
         else:
-            api_key = self.config.get('advanced.volc_api_key', 'a0081937-958a-44d4-8144-f713d09ada03')
+            api_key = self.config.get('advanced.volc_api_key', '374bc8a8-b92c-4e1c-a839-6f6d51f61b8c')
             self.api_ocr = VolcEngineOCR(api_key=api_key)
         # 复用 match 阶段已 OCR 的文本，避免重复调用 API
         self.cached_ocr_texts: Dict[str, str] = cached_ocr_texts or {}
@@ -58,6 +58,7 @@ class SoftDocParser:
         else:
             raise ValueError(f"不支持的文件类型: {ext}，请使用 PDF 或图片格式")
         
+        print(text)
         if not text or not text.strip():
             logger.warning("未能提取到文字内容")
             return self._get_empty_result()
@@ -119,7 +120,7 @@ class SoftDocParser:
         except Exception as e:
             logger.error(f"API 识别失败: {e}")
             raise
-    
+            
     def _extract_soft_info(self, text: str) -> Dict:
         """从文本中提取软著信息"""
         result = {
@@ -136,98 +137,106 @@ class SoftDocParser:
         if not text:
             return result
         
-        # 提取软件名称
-        patterns = [
-            r'软件名称[：:]\s*([^\n]+)',
+        # 先清理文本：去除多余空格，但保留中文字符间的空格（因为 OCR 可能产生）
+        # 对于提取关键信息，我们同时使用原始文本和清理后的文本
+        
+        # 1. 提取软件名称
+        # 模式1: "软 件 名 称 : xxx" 格式（OCR常见）
+        patterns_software = [
+            r'软\s*件\s*名\s*称\s*[：:]\s*([^\n\[\]]+)',
             r'软件全称[：:]\s*([^\n]+)',
-            r'产品名称[：:]\s*([^\n]+)',
+            r'APP\s*软件名称[：:]\s*([^\n]+)',
             r'《([^》]+)》',
         ]
-        for pattern in patterns:
+        for pattern in patterns_software:
             match = re.search(pattern, text)
             if match:
-                result['software_name'] = match.group(1).strip()
+                name = match.group(1).strip()
+                # 过滤无效名称
+                invalid_names = ['计算机软件保护条例', '计算机软件', '软件保护条例']
+                if name not in invalid_names and len(name) < 100:
+                    result['software_name'] = name
+                    break
+        
+        # 2. 提取著作权人（关键修复）
+        patterns_copyright = [
+            # 标准格式："著 作 权 人 : xxx"
+            r'著\s*作\s*权\s*人\s*[：:]\s*([^\n]+)',
+            # "著作权人：" 无空格
+            r'著作权人[：:]\s*([^\n]+)',
+            # "企 业 名 称: xxx"
+            r'企\s*业\s*名\s*称\s*[：:]\s*([^\n]+)',
+            # "企业名称：" 无空格
+            r'企业名称[：:]\s*([^\n]+)',
+        ]
+        for pattern in patterns_copyright:
+            match = re.search(pattern, text)
+            if match:
+                holder = match.group(1).strip()
+                # 清理可能的后缀和空格
+                holder = re.sub(r'[\s]+', '', holder)  # 移除所有空格
+                # 验证是否为有效的公司名（包含有限公司等关键词）
+                if len(holder) >= 4 and ('有限' in holder or '公司' in holder or '工作室' in holder):
+                    result['copyright_holder'] = holder
+                    logger.info(f"提取到著作权人: {holder}")
+                    break
+        
+        # 如果上面没找到，尝试在文本中搜索公司名模式
+        if not result['copyright_holder']:
+            # 查找包含"有限公司"的行
+            lines = text.split('\n')
+            for line in lines:
+                if '有限公司' in line or '科技公司' in line or '网络科技' in line:
+                    # 清理行内容，提取公司名
+                    # 移除常见前缀
+                    cleaned = re.sub(r'^.*?[：:]\s*', '', line)
+                    cleaned = re.sub(r'[\s]+', '', cleaned)
+                    if len(cleaned) >= 6:
+                        result['copyright_holder'] = cleaned
+                        logger.info(f"从行提取到著作权人: {cleaned}")
+                        break
+        
+        # 3. 提取登记号/认证号
+        patterns_reg = [
+            r'认\s*证\s*号\s*[：:]\s*([A-Z0-9]+)',
+            r'认证号[：:]\s*([A-Z0-9]+)',
+            r'登记号[：:]\s*([A-Z0-9]+)',
+            r'证书号[：:]\s*([A-Z0-9]+)',
+            r'(202[4-9]SA\d{7})',  # 2026SA0027426 格式
+            r'(202[4-9]SR\d{7})',
+        ]
+        for pattern in patterns_reg:
+            match = re.search(pattern, text)
+            if match:
+                result['registration_number'] = match.group(1).strip()
                 break
         
-        # 如果没有找到，尝试取第一行
-        if not result['software_name']:
-            lines = [l.strip() for l in text.split('\n') if l.strip()]
-            if lines:
-                result['software_name'] = lines[0][:100]
-        
-        # 提取版本号
-        patterns = [
-            r'版本号[：:]\s*([Vv]?\d+\.\d+(?:\.\d+)?)',
+        # 4. 提取版本号
+        patterns_version = [
+            r'版\s*本\s*号\s*[：:]\s*([Vv]?\d+\.\d+(?:\.\d+)?)',
             r'版本[：:]\s*([Vv]?\d+\.\d+(?:\.\d+)?)',
-            r'[Vv](\d+\.\d+(?:\.\d+)?)',
+            r'APP\s*版\s*本\s*号\s*[：:]\s*([Vv]?\d+\.\d+(?:\.\d+)?)',
+            r'([Vv]\d+\.\d+)',
         ]
-        for pattern in patterns:
+        for pattern in patterns_version:
             match = re.search(pattern, text)
             if match:
                 result['version'] = match.group(1).strip()
                 break
         
-        # 提取著作权人
-        # PDF 提取的文字可能：
-        #   ① 字间有空格："企 业 名 称:   深圳xxx有限公司"
-        #   ② 所有字段挤在一行，无换行："...深圳xxx有限公司证书号: xxx首次发表日期: ..."
-        # 策略：先对全文压缩中文字间空格得到 text_compact，
-        #       再匹配著作权人字段，最终截断到"公司/科技/有限"等关键词结尾，避免把后续字段带进去。
-        text_compact = re.sub(r'(?<=[^\x00-\x7F])\s+(?=[^\x00-\x7F])', '', text)
-
-        # 后续字段名（用于截断）
-        _field_stop = r'(?=证书号|认证号|登记号|首次发表|权利获取|权利范围|发表日期|完成日期|开发完成|\n|$)'
-
-        def _clean_holder(raw: str) -> str:
-            """清理著作权人原始文本：去前缀、截断到公司名结尾"""
-            s = raw.strip()
-            # 去除"企 业 名 称:"等前缀（支持字间空格）
-            s = re.sub(r'^[\u4e00-\u9fff\s]*企[\s]*业[\s]*名[\s]*称[\s]*[：:\s]*', '', s).strip()
-            # 截断到第一个下一字段名之前（PDF单行情况）
-            m = re.search(r'证书号|认证号|登记号|首次发表|权利获取|权利范围|发表日期|完成日期|开发完成', s)
-            if m:
-                s = s[:m.start()].strip()
-            # 去除末尾标点
-            s = re.sub(r'[。；，、：:、\s]+$', '', s).strip()
-            return s
-
-        patterns = [
-            r'著作权人[：:]\s*(.+?)' + _field_stop,
-            r'申请人[：:]\s*(.+?)' + _field_stop,
-            r'权利人[：:]\s*(.+?)' + _field_stop,
-            r'版权人[：:]\s*(.+?)' + _field_stop,
-            r'([^\n]{2,40}(?:有限公司|股份公司|科技公司|网络科技))',
+        # 5. 提取完成日期
+        patterns_date = [
+            r'开\s*发\s*完\s*成\s*日\s*期\s*[：:]\s*(\d{4}年\d{1,2}月\d{1,2}日)',
+            r'完成日期[：:]\s*(\d{4}年\d{1,2}月\d{1,2}日)',
+            r'(\d{4}-\d{1,2}-\d{1,2})',
         ]
-        for pattern in patterns:
-            for search_text in (text_compact, text):
-                match = re.search(pattern, search_text)
-                if match:
-                    holder = _clean_holder(match.group(1))
-                    if 2 < len(holder) < 60:
-                        result['copyright_holder'] = holder
-                        break
-            if result['copyright_holder']:
-                break
-
-        # 提取软著登记号
-        # 真实格式（PDF单行，无换行）：
-        #   "...认证号: 2026SA0056162"  ← 优先取这个
-        #   "软著认000463696号"          ← 证书号，不取
-        # 注意：[^\n]+ 在单行 PDF 里会吃掉整行，改用截断到下一字段名
-        _num_stop = r'(?=\s*(?:首次发表|权利获取|权利范围|发表日期|完成日期|证书号|\n|$))'
-        patterns = [
-            (r'认证号[\s:：]+(\S+)' + _num_stop, False),          # 认证号: 2026SA0056162
-
-            (r'登记号[：:]\s*(\S+)' + _num_stop, False),
-            (r'(2\d{3}S[A-Z]\d+)', False),                        # 如 2026SA0056162 / 2024SR0099999
-        ]
-        for pattern, is_cert in patterns:
-            match = re.search(pattern, text_compact) or re.search(pattern, text)
+        for pattern in patterns_date:
+            match = re.search(pattern, text)
             if match:
-                result['registration_number'] = match.group(1).strip()
+                result['completion_date'] = match.group(1).strip()
                 break
         
-        logger.info(f"解析结果: 软件={result['software_name']}, 著作权人={result['copyright_holder']}")
+        logger.info(f"解析结果: 软件={result['software_name']}, 著作权人={result['copyright_holder']}, 登记号={result['registration_number']}")
         return result
     
     def _get_empty_result(self) -> Dict:
@@ -242,166 +251,154 @@ class SoftDocParser:
             'publish_date': '',
             'original_text': ''
         }
-    
+            
+    # core/softdoc_parser.py - 添加详细日志的 parse_from_folder 方法
+
     def parse_from_folder(self, folder_path: str, game_name_hint: str = '', 
-                          cached_ocr_texts: Dict[str, str] = None) -> Dict:
+                        cached_ocr_texts: Dict[str, str] = None) -> Dict:
         """
         解析软著文件夹，自动识别其中的 PDF 和图片文件并提取信息。
-        优先用 PDF 文字；若无文字则扫描文件夹内所有图片进行 OCR 识别。
-        多张图片时按文件名排序后逐张识别并合并文字。
-        
-        Args:
-            folder_path: 软著文件夹路径
-            game_name_hint: 游戏名提示
-            cached_ocr_texts: 预缓存的 OCR 文本字典 {图片路径: OCR文本}，
-                             如果传入，则优先使用缓存避免重复 OCR
         """
         import glob
         import os
 
         folder_path = os.path.abspath(folder_path)
-        # 标准化路径格式（统一用正斜杠），避免 K:\xxx 和 K:/xxx 不匹配
         folder_path_norm = folder_path.replace('\\', '/')
         
-        print(f"\n【PARSER DEBUG】parse_from_folder: {folder_path}")
-        print(f"【PARSER DEBUG】标准化路径: {folder_path_norm}")
-        print(f"【PARSER DEBUG】self.cached_ocr_texts 数量: {len(self.cached_ocr_texts) if self.cached_ocr_texts else 0}")
-        print(f"【PARSER DEBUG】传入的 cached_ocr_texts 数量: {len(cached_ocr_texts) if cached_ocr_texts else 0}")
+        print(f"\n{'='*60}")
+        print(f"【PARSER DEBUG】parse_from_folder 调用")
+        print(f"  文件夹: {folder_path}")
+        print(f"  游戏名提示: '{game_name_hint}'")
+        print(f"  传入的 cached_ocr_texts 数量: {len(cached_ocr_texts) if cached_ocr_texts else 0}")
+        print(f"  传入的 cached_ocr_texts 键: {list(cached_ocr_texts.keys()) if cached_ocr_texts else []}")
+        print(f"  self.cached_ocr_texts 数量: {len(self.cached_ocr_texts) if self.cached_ocr_texts else 0}")
         logger.info(f"解析软著文件夹: {folder_path}")
 
         all_text_parts = []
 
-        # 1. 扫描文件夹内所有支持的文件
+        # 扫描文件夹内所有支持的文件
         supported_exts = ('.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp')
         all_files = []
         for ext in supported_exts:
             all_files.extend(glob.glob(os.path.join(folder_path, f'*{ext}')))
             all_files.extend(glob.glob(os.path.join(folder_path, f'*{ext.upper()}')))
-        all_files = sorted(set(all_files))  # 去重+排序
+        all_files = sorted(set(all_files))
+
+        print(f"  扫描到 {len(all_files)} 个文件: {[os.path.basename(f) for f in all_files]}")
 
         if not all_files:
             logger.warning(f"文件夹内未找到软著文件: {folder_path}")
             return self._get_empty_result()
 
-        print(f"【PARSER DEBUG】扫描到 {len(all_files)} 个文件:")
-        for f in all_files:
-            print(f"    {os.path.basename(f)}")
-        logger.info(f"找到 {len(all_files)} 个文件: {[os.path.basename(f) for f in all_files]}")
-
-        # 2. 如果有游戏名提示，按游戏名筛选文件（PDF 和图片）
+        # 筛选匹配游戏名的文件
         matched_files = []
         if game_name_hint:
-            print(f"【PARSER DEBUG】使用游戏名筛选: '{game_name_hint}'")
+            hint_clean = game_name_hint.replace(' ', '').replace('_', '')
+            print(f"  游戏名清理后: '{hint_clean}'")
+            
             for f in all_files:
                 fname = os.path.basename(f)
-                # 文件名中包含游戏名（忽略空格、下划线）
                 fname_clean = fname.replace(' ', '').replace('_', '')
-                hint_clean = game_name_hint.replace(' ', '').replace('_', '')
                 if hint_clean in fname_clean:
                     matched_files.append(f)
-                    print(f"【PARSER DEBUG】  文件名匹配: {fname}")
+                    print(f"  ✅ 文件名匹配: {fname}")
             
-            # 文件名匹配失败后，尝试从 OCR 缓存中查找包含游戏名的图片
+            # 从 OCR 缓存中查找
+            if not matched_files and cached_ocr_texts:
+                print(f"  🔍 尝试从 OCR 缓存匹配...")
+                for img_path in cached_ocr_texts.keys():
+                    img_dir = os.path.dirname(img_path).replace('\\', '/')
+                    if img_dir == folder_path_norm:
+                        matched_files.append(img_path)
+                        print(f"  ✅ OCR缓存匹配: {os.path.basename(img_path)}")
+            
             if not matched_files:
-                print(f"【PARSER DEBUG】文件名匹配失败，尝试从 OCR 缓存中查找...")
-                if cached_ocr_texts:
-                    for img_path, ocr_text in cached_ocr_texts.items():
-                        # img_path 可能是标准化的（正斜杠）
-                        img_dir = os.path.dirname(img_path).replace('\\', '/')
-                        if img_dir == folder_path_norm and game_name_hint in ocr_text:
-                            matched_files.append(img_path)
-                            print(f"【PARSER DEBUG】  OCR缓存匹配: {os.path.basename(img_path)}")
-                
-                if not matched_files:
-                    print(f"【PARSER DEBUG】OCR 缓存也未找到匹配，使用全部文件（可能导致解析错误）")
-                    # 不再使用全部文件，而是返回空结果
-                    # 让调用者知道匹配失败
-                    logger.warning(f"文件夹 {folder_path} 未找到游戏 '{game_name_hint}' 对应的文件")
-                    return self._get_empty_result()
-            else:
-                print(f"【PARSER DEBUG】通过文件名匹配筛选出 {len(matched_files)} 个文件")
+                logger.warning(f"文件夹 {folder_path} 未找到游戏 '{game_name_hint}' 对应的文件")
+                return self._get_empty_result()
         else:
             matched_files = all_files
 
-        # 3. 处理匹配到的文件：先处理 PDF，再并发处理图片
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        
+        print(f"  匹配到 {len(matched_files)} 个文件")
+
+        # 处理 PDF 文件（直接提取文字，不需要 OCR）
         pdf_files = [f for f in matched_files if os.path.splitext(f)[1].lower() == '.pdf']
-        image_files = [f for f in matched_files if os.path.splitext(f)[1].lower() != '.pdf']
+        print(f"  PDF 文件: {len(pdf_files)} 个")
         
-        # 3.1 顺序处理 PDF
-        print(f"【PARSER DEBUG】处理 {len(pdf_files)} 个 PDF 文件...")
         for fpath in pdf_files:
             try:
                 text = self._parse_pdf(fpath)
                 if text and text.strip():
                     all_text_parts.append(text)
                     logger.info(f"  PDF 文字提取成功: {len(text)} 字符")
-                else:
-                    logger.info(f"  PDF 无文字内容")
             except Exception as e:
                 logger.warning(f"  PDF 处理失败: {e}")
+
+        # 处理图片文件 - 检查缓存命中情况
+        image_files = [f for f in matched_files if f not in pdf_files]
+        print(f"  图片文件: {len(image_files)} 个")
         
-        # 3.2 并发处理图片 OCR
-        if image_files:
-            print(f"【PARSER DEBUG】并发处理 {len(image_files)} 个图片文件...")
+        cache_hit_count = 0
+        cache_miss_count = 0
+        
+        for fpath in image_files:
+            fpath_norm = os.path.normpath(fpath).replace('\\', '/')
+            text = None
             
-            def process_single_image(fpath):
-                """处理单张图片，返回 (fpath, text)"""
-                fpath_norm = os.path.normpath(fpath).replace('\\', '/')
-                
-                # 尝试从缓存获取
-                if cached_ocr_texts:
-                    if fpath_norm in cached_ocr_texts:
-                        return (fpath, cached_ocr_texts[fpath_norm], 'cache')
-                    elif fpath in cached_ocr_texts:
-                        return (fpath, cached_ocr_texts[fpath], 'cache')
-                if self.cached_ocr_texts:
-                    if fpath_norm in self.cached_ocr_texts:
-                        return (fpath, self.cached_ocr_texts[fpath_norm], 'cache')
-                    elif fpath in self.cached_ocr_texts:
-                        return (fpath, self.cached_ocr_texts[fpath], 'cache')
-                
-                # 缓存未命中，调用 API
+            # 优先从传入的缓存获取
+            if cached_ocr_texts:
+                text = cached_ocr_texts.get(fpath_norm) or cached_ocr_texts.get(fpath)
+                if text:
+                    cache_hit_count += 1
+                    print(f"  ✅ 缓存命中: {os.path.basename(fpath)} ({len(text)} 字符)")
+                else:
+                    print(f"  ❌ 缓存未命中: {os.path.basename(fpath)}")
+                    print(f"      标准化路径: {fpath_norm}")
+                    print(f"      缓存键列表: {list(cached_ocr_texts.keys())[:5]}...")  # 只显示前5个
+            
+            # 如果传入缓存没有，尝试从 self.cached_ocr_texts 获取
+            if not text and self.cached_ocr_texts:
+                text = self.cached_ocr_texts.get(fpath_norm) or self.cached_ocr_texts.get(fpath)
+                if text:
+                    cache_hit_count += 1
+                    print(f"  ✅ self缓存命中: {os.path.basename(fpath)}")
+            
+            # 缓存未命中，调用 API
+            if not text:
+                cache_miss_count += 1
+                print(f"  🔴 缓存未命中，将调用 API OCR: {os.path.basename(fpath)}")
                 try:
                     text = self._parse_image_with_api(fpath)
-                    return (fpath, text, 'api')
-                except Exception as e:
-                    logger.warning(f"  图片 OCR 失败: {os.path.basename(fpath)}: {e}")
-                    return (fpath, '', 'error')
-            
-            # 使用线程池并发处理，最多 4 个线程
-            max_workers = min(4, len(image_files))
-            print(f"【PARSER DEBUG】启动 {max_workers} 个并发线程...")
-            
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(process_single_image, f): f for f in image_files}
-                for future in as_completed(futures):
-                    fpath, text, source = future.result()
                     if text and text.strip():
-                        all_text_parts.append(text)
-                        if source == 'cache':
-                            logger.info(f"  图片使用缓存 OCR: {os.path.basename(fpath)}, {len(text)} 字符")
-                        else:
-                            logger.info(f"  图片 OCR 成功: {os.path.basename(fpath)}, {len(text)} 字符")
-                    elif source == 'api':
-                        logger.warning(f"  图片 OCR 返回空内容: {os.path.basename(fpath)}")
+                        # 同时更新两个缓存
+                        if cached_ocr_texts is not None:
+                            cached_ocr_texts[fpath_norm] = text
+                        if self.cached_ocr_texts is not None:
+                            self.cached_ocr_texts[fpath_norm] = text
+                        print(f"  ✅ API OCR 成功: {len(text)} 字符")
+                except Exception as e:
+                    logger.error(f"  API OCR 失败: {e}")
+                    text = ""
+            
+            if text and text.strip():
+                all_text_parts.append(text)
+
+        print(f"\n  📊 缓存统计: 命中={cache_hit_count}, 未命中={cache_miss_count}, 总计={len(image_files)}")
 
         if not all_text_parts:
             logger.warning("文件夹内所有文件均未能提取到文字")
             return self._get_empty_result()
 
-        # 合并所有文字
         combined_text = '\n'.join(all_text_parts)
+        print(f"  合并文本长度: {len(combined_text)} 字符")
         logger.info(f"合计提取 {len(combined_text)} 字符")
 
         result = self._extract_soft_info(combined_text)
         result['original_text'] = combined_text
 
-        # 用游戏名hint补充空字段
         if not result.get('software_name') and game_name_hint:
             result['software_name'] = game_name_hint
 
+        print(f"{'='*60}\n")
         return result
 
     def validate_result(self, result: Dict) -> bool:

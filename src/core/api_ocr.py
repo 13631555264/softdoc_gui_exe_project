@@ -94,7 +94,6 @@ class VolcEngineOCR:
 5. **特殊符号**：注意中文顿号（、）和逗号（，）的区别，注意书名号《》和引号""的区别
 
 请直接输出识别结果，不要添加解释说明。"""
-        """识别单张图片中的文字"""
         try:
             image_data_url = self.read_image_as_base64(image_path)
             
